@@ -9,6 +9,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:camera/camera.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 
@@ -54,6 +56,8 @@ class PotholeRecord {
     required this.timestamp,
     required this.confidence,
     required this.size,
+    this.latitude,
+    this.longitude,
   });
 
   final int id;
@@ -62,6 +66,8 @@ class PotholeRecord {
   final DateTime timestamp;
   final double confidence;
   final String size;
+  final double? latitude;
+  final double? longitude;
 
   String get formattedTime =>
       '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
@@ -143,6 +149,8 @@ final sampleRecords = List<PotholeRecord>.generate(6, (index) {
     timestamp: DateTime.now().subtract(Duration(minutes: index * 20)),
     confidence: conf,
     size: sizes[index % sizes.length],
+    latitude: 41.0082 + (Random().nextDouble() - 0.5) * 0.05,
+    longitude: 28.9784 + (Random().nextDouble() - 0.5) * 0.05,
   );
 });
 
@@ -207,6 +215,8 @@ class _MainTabsState extends State<MainTabs> {
               ).toLocal(),
               confidence: (item['confidence'] as num).toDouble(),
               size: _getSizeFromBbox(item['bbox'] as List<dynamic>),
+              latitude: lat?.toDouble(),
+              longitude: lng?.toDouble(),
             ),
           );
         }
@@ -290,7 +300,7 @@ class _MainTabsState extends State<MainTabs> {
         onModeChanged: (value) => setState(() => cameraMode = value),
         onAnalysisComplete: _fetchRecords,
       ),
-      const _MapTab(),
+      _MapTab(records: records),
       _RecordsTab(
         records: records,
         onDelete: _deleteRecord,
@@ -383,6 +393,8 @@ class _CameraTabState extends State<_CameraTab> {
   DateTime? _lastDbSaveTime;
 
   Position? _latestPosition;
+  Position? _lastSavedPosition;
+  bool _isDuplicateWait = false;
   Timer? _gpsTimer;
 
   // Video Analizi yeni listesi
@@ -514,10 +526,24 @@ class _CameraTabState extends State<_CameraTab> {
       final bytes = await imageFile.readAsBytes();
 
       bool shouldSaveToDb = false;
+      bool isDuplicate = false;
       if (_lastDbSaveTime == null ||
           DateTime.now().difference(_lastDbSaveTime!) >
               const Duration(milliseconds: 1500)) {
         shouldSaveToDb = true;
+        
+        if (_latestPosition != null && _lastSavedPosition != null) {
+          final distance = Geolocator.distanceBetween(
+            _lastSavedPosition!.latitude,
+            _lastSavedPosition!.longitude,
+            _latestPosition!.latitude,
+            _latestPosition!.longitude,
+          );
+          if (distance < 10.0) {
+            shouldSaveToDb = false;
+            isDuplicate = true;
+          }
+        }
       }
 
       String uriStr = '$BASE_URL/predict?save_record=$shouldSaveToDb';
@@ -549,11 +575,20 @@ class _CameraTabState extends State<_CameraTab> {
 
           if (_isLiveDetectionActive && _currentDetections.isNotEmpty) {
             _latestLiveAlert = _currentDetections.first;
+            _isDuplicateWait = isDuplicate;
+            
             if (shouldSaveToDb) {
               _lastDbSaveTime = DateTime.now();
+              if (_latestPosition != null) {
+                _lastSavedPosition = _latestPosition;
+              }
             }
+            
             Future.delayed(const Duration(seconds: 3), () {
-              if (mounted) setState(() => _latestLiveAlert = null);
+              if (mounted) setState(() {
+                _latestLiveAlert = null;
+                _isDuplicateWait = false;
+              });
             });
           }
         });
@@ -1132,11 +1167,11 @@ class _CameraTabState extends State<_CameraTab> {
                                 horizontal: 16,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.blueAccent.withOpacity(0.95),
+                                color: _isDuplicateWait ? Colors.orange.withOpacity(0.90) : Colors.blueAccent.withOpacity(0.95),
                                 borderRadius: BorderRadius.circular(12),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.blueAccent.withOpacity(0.4),
+                                    color: _isDuplicateWait ? Colors.orange.withOpacity(0.4) : Colors.blueAccent.withOpacity(0.4),
                                     blurRadius: 10,
                                     spreadRadius: 2,
                                   ),
@@ -1144,8 +1179,8 @@ class _CameraTabState extends State<_CameraTab> {
                               ),
                               child: Row(
                                 children: [
-                                  const Icon(
-                                    Icons.warning_amber_rounded,
+                                  Icon(
+                                    _isDuplicateWait ? Icons.info_outline : Icons.warning_amber_rounded,
                                     color: Colors.white,
                                     size: 28,
                                   ),
@@ -1156,16 +1191,18 @@ class _CameraTabState extends State<_CameraTab> {
                                           CrossAxisAlignment.start,
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        const Text(
-                                          'Çukur Kaydedildi!',
-                                          style: TextStyle(
+                                        Text(
+                                          _isDuplicateWait ? 'Aynı Çukur Tespit Edildi' : 'Çukur Kaydedildi!',
+                                          style: const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.bold,
                                             fontSize: 14,
                                           ),
                                         ),
                                         Text(
-                                          'G: %${(_latestLiveAlert!.confidence * 100).toStringAsFixed(1)} | Veritabanına aktarıldı',
+                                          _isDuplicateWait
+                                              ? 'G: %${(_latestLiveAlert!.confidence * 100).toStringAsFixed(1)} | Zaten kaydedildi'
+                                              : 'G: %${(_latestLiveAlert!.confidence * 100).toStringAsFixed(1)} | Veritabanına aktarıldı',
                                           style: const TextStyle(
                                             color: Colors.white70,
                                             fontSize: 12,
@@ -1453,8 +1490,194 @@ class _CameraTabState extends State<_CameraTab> {
   }
 }
 
-class _MapTab extends StatelessWidget {
-  const _MapTab();
+class _MapTab extends StatefulWidget {
+  final List<PotholeRecord> records;
+  const _MapTab({Key? key, required this.records}) : super(key: key);
+
+  @override
+  State<_MapTab> createState() => _MapTabState();
+}
+
+class _MapTabState extends State<_MapTab> {
+  final MapController _mapController = MapController();
+  List<Marker> _markers = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _buildMarkers();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MapTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.records != oldWidget.records) {
+      _buildMarkers();
+    }
+  }
+
+  void _buildMarkers() {
+    final markers = <Marker>[];
+    for (var record in widget.records) {
+      if (record.latitude != null && record.longitude != null) {
+        markers.add(
+          Marker(
+            width: 48.0,
+            height: 48.0,
+            point: LatLng(record.latitude!, record.longitude!),
+            builder: (ctx) => GestureDetector(
+              onTap: () => _showPotholeDetails(record),
+              child: const Icon(
+                Icons.warning_rounded,
+                color: Colors.redAccent,
+                size: 38,
+              ),
+            ),
+          ),
+        );
+      }
+    }
+    setState(() {
+      _markers = markers;
+    });
+    
+    if (markers.isNotEmpty) {
+      _centerMarkers();
+    }
+  }
+
+  void _centerMarkers() {
+    if (_markers.isEmpty) return;
+    double sumLat = 0;
+    double sumLng = 0;
+    for (var m in _markers) {
+      sumLat += m.point.latitude;
+      sumLng += m.point.longitude;
+    }
+    final center = LatLng(sumLat / _markers.length, sumLng / _markers.length);
+    
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        try {
+           _mapController.move(center, 12.0);
+        } catch (_) {}
+      }
+    });
+  }
+
+  void _showPotholeDetails(PotholeRecord record) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0C1320),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border.all(color: const Color(0xFF1F355A)),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 20),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: record.imagePath.startsWith('http')
+                        ? Image.network(
+                            record.imagePath,
+                            width: 100,
+                            height: 100,
+                            fit: BoxFit.cover,
+                          )
+                        : Image.asset(
+                            record.imagePath,
+                            width: 100,
+                            height: 100,
+                            fit: BoxFit.cover,
+                          ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Tespit #${record.id}',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            const Icon(Icons.location_on, size: 14, color: Colors.white54),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                record.location,
+                                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            const Icon(Icons.access_time, size: 14, color: Colors.white54),
+                            const SizedBox(width: 4),
+                            Text(
+                              '${record.formattedDate} - ${record.formattedTime}',
+                              style: const TextStyle(color: Colors.white54, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                          ),
+                          child: Text(
+                            'Güven: %${(record.confidence * 100).toStringAsFixed(1)} | Boyut: ${record.size}',
+                            style: const TextStyle(
+                              color: Colors.redAccent,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1472,16 +1695,16 @@ class _MapTab extends StatelessWidget {
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: const [
+                children: [
                   _StatusToken(
                     icon: Icons.circle,
                     color: Colors.green,
-                    text: 'YOLOv8 AI Aktif',
+                    text: '${_markers.length} Çukur',
                   ),
-                  _StatusToken(
-                    icon: Icons.location_on,
-                    color: Colors.white,
-                    text: 'Güçlü Sinyal',
+                  const _StatusToken(
+                    icon: Icons.map,
+                    color: Colors.blueAccent,
+                    text: 'Karanlık Harita',
                   ),
                 ],
               ),
@@ -1496,10 +1719,24 @@ class _MapTab extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: const Color(0xFF1F355A), width: 1.1),
               ),
-              child: const Center(
-                child: Text(
-                  'Harita Görünümü',
-                  style: TextStyle(color: Colors.white54, fontSize: 20),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(15),
+                child: FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    center: LatLng(41.0082, 28.9784),
+                    zoom: 11.0,
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                      subdomains: const ['a', 'b', 'c', 'd'],
+                      userAgentPackageName: 'com.example.bitirme',
+                    ),
+                    MarkerLayer(
+                      markers: _markers,
+                    ),
+                  ],
                 ),
               ),
             ),
