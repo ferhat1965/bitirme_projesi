@@ -4,25 +4,15 @@ import 'dart:convert';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:image_picker/image_picker.dart';
 import 'package:camera/camera.dart';
 import 'package:video_player/video_player.dart';
-import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
-
-/// Backend API base URL (emulator için varsayılan)
-/// 1) Android emulator: http://10.0.2.2:8000
-/// 2) iOS simulator: http://127.0.0.1:8000
-/// 3) Gerçek cihaz: http://<PC_IP>:8000 (pc ip adresini ipconfig ile bul)
-const String BASE_URL = 'http://192.168.1.108:8000';
-
-void main() {
-  runApp(const RoadGuardApp());
-}
+import 'package:image_picker/image_picker.dart';
+import 'package:bitirme/services/tflite_service.dart';
+import 'package:bitirme/services/db_helper.dart';
 
 class RoadGuardApp extends StatelessWidget {
   const RoadGuardApp({super.key});
@@ -174,80 +164,25 @@ class _MainTabsState extends State<MainTabs> {
 
   Future<void> _fetchRecords() async {
     try {
-      final response = await http.get(Uri.parse('$BASE_URL/records'));
-      if (response.statusCode == 200) {
-        final List<dynamic> data = jsonDecode(response.body);
-        List<PotholeRecord> loaded = [];
-        for (var item in data) {
-          final id = item['id'] as int;
-          String roadName = 'Eski Kayıt / Konum Yok';
-          final lat = item['latitude'] as num?;
-          final lng = item['longitude'] as num?;
-
-          if (lat != null && lng != null) {
-            try {
-              List<Placemark> marks = await placemarkFromCoordinates(
-                lat.toDouble(),
-                lng.toDouble(),
-              );
-              if (marks.isNotEmpty) {
-                final m = marks.first;
-                roadName = [
-                  m.thoroughfare,
-                  m.subLocality,
-                  m.administrativeArea,
-                ].where((e) => e != null && e.isNotEmpty).join(', ');
-              }
-            } catch (_) {
-              roadName = 'Konum Bilgisi Alınamadı';
-            }
-          }
-
-          loaded.add(
-            PotholeRecord(
-              id: id,
-              imagePath: item['image_url'] != null
-                  ? '$BASE_URL${item['image_url']}'
-                  : 'assets/placeholder.png',
-              location: roadName.isEmpty ? 'Sensör Konumu' : roadName,
-              timestamp: DateTime.parse(
-                item['detected_at'] as String,
-              ).toLocal(),
-              confidence: (item['confidence'] as num).toDouble(),
-              size: _getSizeFromBbox(item['bbox'] as List<dynamic>),
-              latitude: lat?.toDouble(),
-              longitude: lng?.toDouble(),
-            ),
-          );
-        }
-
-        if (mounted) {
-          setState(() {
-            records = loaded;
-          });
-        }
+      final loaded = await DatabaseHelper.instance.fetchRecords();
+      if (mounted) {
+        setState(() {
+          records = loaded;
+        });
       }
     } catch (e) {
-      debugPrint('Kayıtları çekme hatası: $e');
+      debugPrint('Yerel veritabanı okuma hatası: $e');
     }
   }
 
   Future<void> _deleteRecord(int id) async {
     try {
-      final response = await http.delete(Uri.parse('$BASE_URL/records/$id'));
-      if (response.statusCode == 200) {
-        _fetchRecords();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Kayıt başarıyla silindi')),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Silme işlemi başarısız')),
-          );
-        }
+      await DatabaseHelper.instance.deleteRecord(id);
+      _fetchRecords();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kayıt başarıyla silindi (Yerel)')),
+        );
       }
     } catch (e) {
       debugPrint('Kayıt silme hatası: $e');
@@ -256,24 +191,16 @@ class _MainTabsState extends State<MainTabs> {
 
   Future<void> _deleteBulkRecords(List<int> ids) async {
     try {
-      final response = await http.delete(
-        Uri.parse('$BASE_URL/records/bulk/delete'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'record_ids': ids}),
-      );
-      if (response.statusCode == 200) {
-        _fetchRecords();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Seçili kayıtlar başarıyla silindi')),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Toplu silme başarısız')),
-          );
-        }
+      for (final id in ids) {
+        await DatabaseHelper.instance.deleteRecord(id);
+      }
+      _fetchRecords();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Seçili kayıtlar başarıyla silindi (Yerel)'),
+          ),
+        );
       }
     } catch (e) {
       debugPrint('Toplu kayıt silme hatası: $e');
@@ -523,80 +450,92 @@ class _CameraTabState extends State<_CameraTab> {
     _isAnalyzing = true;
     try {
       final XFile imageFile = await _cameraController!.takePicture();
-      final bytes = await imageFile.readAsBytes();
+      final detections = await TFLiteService().runImage(imageFile.path);
 
-      bool shouldSaveToDb = false;
-      bool isDuplicate = false;
-      if (_lastDbSaveTime == null ||
-          DateTime.now().difference(_lastDbSaveTime!) >
-              const Duration(milliseconds: 1500)) {
-        shouldSaveToDb = true;
-        
-        if (_latestPosition != null && _lastSavedPosition != null) {
-          final distance = Geolocator.distanceBetween(
-            _lastSavedPosition!.latitude,
-            _lastSavedPosition!.longitude,
-            _latestPosition!.latitude,
-            _latestPosition!.longitude,
-          );
-          if (distance < 10.0) {
-            shouldSaveToDb = false;
-            isDuplicate = true;
-          }
-        }
-      }
+      // Cihazın hafızası dolmasın diye alınan geçici çerçeveyi (frame) TFLite analizi sonrasında siliyoruz
+      try {
+        final f = File(imageFile.path);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
 
-      String uriStr = '$BASE_URL/predict?save_record=$shouldSaveToDb';
-      if (shouldSaveToDb && _latestPosition != null) {
-        uriStr +=
-            '&latitude=${_latestPosition!.latitude}&longitude=${_latestPosition!.longitude}';
-      }
-      final uri = Uri.parse(uriStr);
-      final request = http.MultipartRequest('POST', uri);
-
-      request.files.add(
-        http.MultipartFile.fromBytes('file', bytes, filename: 'frame.jpg'),
-      );
-
-      final response = await request.send();
       if (!mounted) return;
       if (!_isLiveDetectionActive) return;
-      if (response.statusCode == 200) {
-        final body = await response.stream.bytesToString();
-        final json = jsonDecode(body) as Map<String, dynamic>;
-        final detections = (json['detections'] as List<dynamic>?) ?? [];
+
+      setState(() {
+        _mediaWidth = 640;
+        _mediaHeight = 640;
+        _currentDetections = detections;
+      });
+
+      if (_isLiveDetectionActive && _currentDetections.isNotEmpty) {
+        final bestDet = _currentDetections.first;
+
+        bool shouldSaveToDb = false;
+        bool isDuplicate = false;
+        if (_lastDbSaveTime == null ||
+            DateTime.now().difference(_lastDbSaveTime!) >
+                const Duration(milliseconds: 1500)) {
+          shouldSaveToDb = true;
+
+          if (_latestPosition != null && _lastSavedPosition != null) {
+            final distance = Geolocator.distanceBetween(
+              _lastSavedPosition!.latitude,
+              _lastSavedPosition!.longitude,
+              _latestPosition!.latitude,
+              _latestPosition!.longitude,
+            );
+            if (distance < 10.0) {
+              shouldSaveToDb = false;
+              isDuplicate = true;
+            }
+          }
+        }
 
         setState(() {
-          _mediaWidth = (json['media_width'] as num?)?.toDouble();
-          _mediaHeight = (json['media_height'] as num?)?.toDouble();
-          _currentDetections = detections
-              .map((det) => Detection.fromJson(det as Map<String, dynamic>))
-              .toList();
+          _latestLiveAlert = bestDet;
+          _isDuplicateWait = isDuplicate;
+        });
 
-          if (_isLiveDetectionActive && _currentDetections.isNotEmpty) {
-            _latestLiveAlert = _currentDetections.first;
-            _isDuplicateWait = isDuplicate;
-            
-            if (shouldSaveToDb) {
-              _lastDbSaveTime = DateTime.now();
-              if (_latestPosition != null) {
-                _lastSavedPosition = _latestPosition;
-              }
-            }
-            
-            Future.delayed(const Duration(seconds: 3), () {
-              if (mounted) setState(() {
-                _latestLiveAlert = null;
-                _isDuplicateWait = false;
-              });
+        if (shouldSaveToDb) {
+          _lastDbSaveTime = DateTime.now();
+          if (_latestPosition != null) {
+            _lastSavedPosition = _latestPosition;
+          }
+
+          final pr = PotholeRecord(
+            id: 0,
+            imagePath: imageFile.path,
+            location: "Yerel Sensör (TFLite)",
+            timestamp: DateTime.now(),
+            confidence: bestDet.confidence,
+            size: "Tahmini",
+            latitude: _latestPosition?.latitude,
+            longitude: _latestPosition?.longitude,
+          );
+          await DatabaseHelper.instance.insertRecord(pr, [
+            bestDet.x1,
+            bestDet.y1,
+            bestDet.x2,
+            bestDet.y2,
+          ]);
+        }
+
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) {
+            setState(() {
+              _latestLiveAlert = null;
+              _isDuplicateWait = false;
             });
           }
         });
       }
     } catch (e) {
-      debugPrint('Frame analizi hatası: $e');
+      debugPrint('TFLite Frame analizi hatası: $e');
     } finally {
-      _isAnalyzing = false;
+      if (mounted)
+        setState(() {
+          _isAnalyzing = false;
+        });
     }
   }
 
@@ -651,62 +590,57 @@ class _CameraTabState extends State<_CameraTab> {
 
     setState(() {
       _isAnalyzing = true;
-      _analysisText = 'Analiz ediliyor...';
+      _analysisText = 'TFLite ile analiz ediliyor...';
       _currentDetections = [];
     });
 
     try {
-      String uriStr = '$BASE_URL/predict?save_record=true';
-      if (_latestPosition != null) {
-        uriStr +=
-            '&latitude=${_latestPosition!.latitude}&longitude=${_latestPosition!.longitude}';
+      final detections = await TFLiteService().runImage(_mediaPath!);
+
+      double maxConf = 0.0;
+      for (var d in detections) {
+        if (d.confidence > maxConf) maxConf = d.confidence;
       }
-      final uri = Uri.parse(uriStr);
-      final request = http.MultipartRequest('POST', uri);
 
-      // 🔥 EN KRİTİK SATIR
-      request.files.add(await http.MultipartFile.fromPath('file', _mediaPath!));
+      setState(() {
+        _mediaWidth = 640;
+        _mediaHeight = 640;
+        _analysisText =
+            'Tespit: ${detections.length} | Güven: ${(maxConf * 100).toStringAsFixed(1)}%';
+        _currentDetections = detections;
+      });
 
-      final response = await request.send();
-
-      if (response.statusCode == 200) {
-        final body = await response.stream.bytesToString();
-        final json = jsonDecode(body) as Map<String, dynamic>;
-
-        final detections = (json['detections'] as List<dynamic>?) ?? [];
-        final count = detections.length;
-
-        double maxConfidence = 0.0;
-        for (var det in detections) {
-          final conf = (det['confidence'] as num).toDouble();
-          if (conf > maxConfidence) maxConfidence = conf;
-        }
-
-        setState(() {
-          _mediaWidth = (json['media_width'] as num?)?.toDouble();
-          _mediaHeight = (json['media_height'] as num?)?.toDouble();
-          _analysisText =
-              'Tespit: $count | Güven: ${(maxConfidence * 100).toStringAsFixed(1)}%';
-
-          _currentDetections = detections
-              .map((det) => Detection.fromJson(det as Map<String, dynamic>))
-              .toList();
-        });
-
-        await widget.onAnalysisComplete();
-      } else {
-        setState(() {
-          _analysisText = 'Analiz başarısız (kod ${response.statusCode})';
-        });
+      if (detections.isNotEmpty) {
+        final best = detections.first;
+        final pr = PotholeRecord(
+          id: 0,
+          imagePath: _mediaPath!,
+          location: "Yerel Resim (TFLite)",
+          timestamp: DateTime.now(),
+          confidence: maxConf,
+          size: "Tahmini",
+          latitude: _latestPosition?.latitude,
+          longitude: _latestPosition?.longitude,
+        );
+        await DatabaseHelper.instance.insertRecord(pr, [
+          best.x1,
+          best.y1,
+          best.x2,
+          best.y2,
+        ]);
       }
+
+      await widget.onAnalysisComplete();
     } catch (e) {
       setState(() {
-        _analysisText = 'Analiz hatası: $e';
+        _analysisText = 'TFLite Analiz hatası: $e';
       });
     } finally {
-      setState(() {
-        _isAnalyzing = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isAnalyzing = false;
+        });
+      }
     }
   }
 
@@ -741,178 +675,18 @@ class _CameraTabState extends State<_CameraTab> {
   }
 
   Future<void> _analyzeVideo() async {
-    if (_mediaPath == null || !_isVideo) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lütfen önce bir video seçin.')),
-      );
-      return;
-    }
+    if (_mediaPath == null || !_isVideo) return;
 
-    setState(() {
-      _isAnalyzing = true;
-      _analysisText = 'Video analiz ediliyor...';
-    });
-
-    if (_videoController != null) {
-      await _videoController!.pause();
-      await _videoController!.seekTo(Duration.zero);
-    }
-
-    try {
-      // Backend'e Multipart form isteği olarak gönder
-
-      // Backend'e gönder
-      final uri = Uri.parse('$BASE_URL/predict_video');
-      final request = http.MultipartRequest('POST', uri);
-      request.files.add(await http.MultipartFile.fromPath('file', _mediaPath!));
-
-      final response = await request.send();
-
-      if (response.statusCode == 200) {
-        final body = await response.stream.bytesToString();
-        final result = json.decode(body);
-        final detections = result['detections'] as List<dynamic>;
-
-        final parsedDetections = detections
-            .map((d) => Detection.fromJson(d))
-            .toList();
-
-        double calculateIoU(Detection a, Detection b) {
-          final intersectLeft = max(a.x1, b.x1);
-          final intersectTop = max(a.y1, b.y1);
-          final intersectRight = min(a.x2, b.x2);
-          final intersectBottom = min(a.y2, b.y2);
-
-          if (intersectRight < intersectLeft || intersectBottom < intersectTop)
-            return 0.0;
-
-          final intersectArea =
-              (intersectRight - intersectLeft) *
-              (intersectBottom - intersectTop);
-          final areaA = (a.x2 - a.x1) * (a.y2 - a.y1);
-          final areaB = (b.x2 - b.x1) * (b.y2 - b.y1);
-
-          return intersectArea / (areaA + areaB - intersectArea);
-        }
-
-        List<List<Detection>> tracks = [];
-        for (var d in parsedDetections) {
-          if (d.frame == null) continue;
-          bool matched = false;
-          for (var track in tracks) {
-            final lastDet = track.last;
-            // FPS = 30 varsayımı, 3 saniye = 90 frame
-            if ((d.frame! - lastDet.frame!).abs() < 90) {
-              final iou = calculateIoU(d, lastDet);
-              if (iou > 0.3) {
-                track.add(d);
-                matched = true;
-                break;
-              }
-            }
-          }
-          if (!matched) {
-            tracks.add([d]);
-          }
-        }
-
-        List<VideoDetectionItem> newItems = [];
-        for (var track in tracks) {
-          track.sort((a, b) => b.confidence.compareTo(a.confidence));
-          final best = track.first;
-
-          final timeMs = (best.frame! / 30 * 1000).round();
-          final second = (timeMs / 1000).floor();
-
-          final m = second ~/ 60;
-          final s = second % 60;
-          final formattedTime =
-              '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-
-          final timeMsThumb = second * 1000;
-          final path = await video_thumbnail.VideoThumbnail.thumbnailFile(
-            video: _mediaPath!,
-            imageFormat: video_thumbnail.ImageFormat.PNG,
-            quality: 75,
-            timeMs: timeMsThumb,
-          );
-
-          if (path != null) {
-            newItems.add(
-              VideoDetectionItem(
-                timeMs: timeMsThumb,
-                formattedTime: formattedTime,
-                bestDetection: best,
-                thumbnailPath: path,
-                totalDetectionsInSecond: track.length,
-              ),
-            );
-          }
-        }
-
-        newItems.sort((a, b) => a.timeMs.compareTo(b.timeMs));
-
-        setState(() {
-          _mediaWidth = (result['media_width'] as num?)?.toDouble();
-          _mediaHeight = (result['media_height'] as num?)?.toDouble();
-          _currentDetections = parsedDetections;
-          _videoDetectionsList = newItems;
-          _analysisText =
-              'Video analiz tamamlandı. ${parsedDetections.length} çukur ${newItems.length} farklı saniyede tespit edildi.';
-        });
-
-        if (_videoController != null) {
-          await _videoController!.seekTo(Duration.zero);
-          await _videoController!.play();
-        }
-
-        // Kayıtları backend'e gönder
-        await _saveDetectionToBackend(
-          _mediaPath!,
-          parsedDetections.length,
-          'video',
-        );
-      } else {
-        setState(() {
-          _analysisText = 'Video analiz hatası: ${response.statusCode}';
-        });
-      }
-    } catch (e) {
-      setState(() {
-        _analysisText = 'Video analiz hatası: $e';
-      });
-    } finally {
-      setState(() {
-        _isAnalyzing = false;
-      });
-    }
-  }
-
-  Future<void> _saveDetectionToBackend(
-    String mediaPath,
-    int detectionCount,
-    String mediaType,
-  ) async {
-    // Backend'e detection kayıtlarını gönderme işlemi
-    // Şimdilik basit bir implementasyon
-    try {
-      final response = await http.post(
-        Uri.parse('$BASE_URL/records'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'media_path': mediaPath,
-          'detection_count': detectionCount,
-          'media_type': mediaType,
-          'timestamp': DateTime.now().toIso8601String(),
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        print('Kayıt gönderme hatası: ${response.statusCode}');
-      }
-    } catch (e) {
-      print('Kayıt gönderme hatası: $e');
-    }
+    // TFLite offline video analysis requires native buffering
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Çevrimdışı (TFLite) modunda video analizi desteklenmemektedir. Mobil kullanım için Canlı Kamera veya Resim modunu tercih ediniz.',
+        ),
+        duration: Duration(seconds: 4),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   void _toggleSystem() {
@@ -1167,11 +941,15 @@ class _CameraTabState extends State<_CameraTab> {
                                 horizontal: 16,
                               ),
                               decoration: BoxDecoration(
-                                color: _isDuplicateWait ? Colors.orange.withOpacity(0.90) : Colors.blueAccent.withOpacity(0.95),
+                                color: _isDuplicateWait
+                                    ? Colors.orange.withOpacity(0.90)
+                                    : Colors.blueAccent.withOpacity(0.95),
                                 borderRadius: BorderRadius.circular(12),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: _isDuplicateWait ? Colors.orange.withOpacity(0.4) : Colors.blueAccent.withOpacity(0.4),
+                                    color: _isDuplicateWait
+                                        ? Colors.orange.withOpacity(0.4)
+                                        : Colors.blueAccent.withOpacity(0.4),
                                     blurRadius: 10,
                                     spreadRadius: 2,
                                   ),
@@ -1180,7 +958,9 @@ class _CameraTabState extends State<_CameraTab> {
                               child: Row(
                                 children: [
                                   Icon(
-                                    _isDuplicateWait ? Icons.info_outline : Icons.warning_amber_rounded,
+                                    _isDuplicateWait
+                                        ? Icons.info_outline
+                                        : Icons.warning_amber_rounded,
                                     color: Colors.white,
                                     size: 28,
                                   ),
@@ -1192,7 +972,9 @@ class _CameraTabState extends State<_CameraTab> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         Text(
-                                          _isDuplicateWait ? 'Aynı Çukur Tespit Edildi' : 'Çukur Kaydedildi!',
+                                          _isDuplicateWait
+                                              ? 'Aynı Çukur Tespit Edildi'
+                                              : 'Çukur Kaydedildi!',
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.bold,
@@ -1540,7 +1322,7 @@ class _MapTabState extends State<_MapTab> {
     setState(() {
       _markers = markers;
     });
-    
+
     if (markers.isNotEmpty) {
       _centerMarkers();
     }
@@ -1555,11 +1337,11 @@ class _MapTabState extends State<_MapTab> {
       sumLng += m.point.longitude;
     }
     final center = LatLng(sumLat / _markers.length, sumLng / _markers.length);
-    
+
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
         try {
-           _mapController.move(center, 12.0);
+          _mapController.move(center, 12.0);
         } catch (_) {}
       }
     });
@@ -1628,12 +1410,19 @@ class _MapTabState extends State<_MapTab> {
                         const SizedBox(height: 6),
                         Row(
                           children: [
-                            const Icon(Icons.location_on, size: 14, color: Colors.white54),
+                            const Icon(
+                              Icons.location_on,
+                              size: 14,
+                              color: Colors.white54,
+                            ),
                             const SizedBox(width: 4),
                             Expanded(
                               child: Text(
                                 record.location,
-                                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 13,
+                                ),
                               ),
                             ),
                           ],
@@ -1641,21 +1430,33 @@ class _MapTabState extends State<_MapTab> {
                         const SizedBox(height: 6),
                         Row(
                           children: [
-                            const Icon(Icons.access_time, size: 14, color: Colors.white54),
+                            const Icon(
+                              Icons.access_time,
+                              size: 14,
+                              color: Colors.white54,
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               '${record.formattedDate} - ${record.formattedTime}',
-                              style: const TextStyle(color: Colors.white54, fontSize: 12),
+                              style: const TextStyle(
+                                color: Colors.white54,
+                                fontSize: 12,
+                              ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.redAccent.withOpacity(0.2),
                             borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                            border: Border.all(
+                              color: Colors.redAccent.withOpacity(0.5),
+                            ),
                           ),
                           child: Text(
                             'Güven: %${(record.confidence * 100).toStringAsFixed(1)} | Boyut: ${record.size}',
@@ -1729,13 +1530,12 @@ class _MapTabState extends State<_MapTab> {
                   ),
                   children: [
                     TileLayer(
-                      urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                      urlTemplate:
+                          'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
                       subdomains: const ['a', 'b', 'c', 'd'],
                       userAgentPackageName: 'com.example.bitirme',
                     ),
-                    MarkerLayer(
-                      markers: _markers,
-                    ),
+                    MarkerLayer(markers: _markers),
                   ],
                 ),
               ),
