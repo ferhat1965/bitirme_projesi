@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'dart:io';
-import 'dart:convert';
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
@@ -9,10 +9,15 @@ import 'package:video_player/video_player.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart' as path_provider;
 import 'package:bitirme/services/tflite_service.dart';
 import 'package:bitirme/services/db_helper.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const RoadGuardApp());
+}
 
 class RoadGuardApp extends StatelessWidget {
   const RoadGuardApp({super.key});
@@ -395,10 +400,13 @@ class _CameraTabState extends State<_CameraTab> {
 
   @override
   void dispose() {
-    _cameraController?.dispose();
-    _videoController?.dispose();
+    _isLiveDetectionActive = false;
     _detectionTimer?.cancel();
     _gpsTimer?.cancel();
+    _cameraController?.dispose();
+    _cameraController = null;
+    _videoController?.dispose();
+    _videoController = null;
     super.dispose();
   }
 
@@ -443,7 +451,7 @@ class _CameraTabState extends State<_CameraTab> {
   }
 
   Future<void> _captureAndAnalyzeFrame() async {
-    if (_isAnalyzing) return;
+    if (!mounted || _isAnalyzing || !_isLiveDetectionActive) return;
     if (_cameraController == null || !_cameraController!.value.isInitialized)
       return;
 
@@ -452,18 +460,10 @@ class _CameraTabState extends State<_CameraTab> {
       final XFile imageFile = await _cameraController!.takePicture();
       final detections = await TFLiteService().runImage(imageFile.path);
 
-      // Cihazın hafızası dolmasın diye alınan geçici çerçeveyi (frame) TFLite analizi sonrasında siliyoruz
-      try {
-        final f = File(imageFile.path);
-        if (await f.exists()) await f.delete();
-      } catch (_) {}
-
       if (!mounted) return;
       if (!_isLiveDetectionActive) return;
 
       setState(() {
-        _mediaWidth = 640;
-        _mediaHeight = 640;
         _currentDetections = detections;
       });
 
@@ -502,9 +502,16 @@ class _CameraTabState extends State<_CameraTab> {
             _lastSavedPosition = _latestPosition;
           }
 
+          // Resmi kalıcı olarak kaydet
+          final directory = await path_provider
+              .getApplicationDocumentsDirectory();
+          final savedImagePath =
+              '${directory.path}/pothole_${DateTime.now().millisecondsSinceEpoch}.jpg';
+          await File(imageFile.path).copy(savedImagePath);
+
           final pr = PotholeRecord(
             id: 0,
-            imagePath: imageFile.path,
+            imagePath: savedImagePath,
             location: "Yerel Sensör (TFLite)",
             timestamp: DateTime.now(),
             confidence: bestDet.confidence,
@@ -529,6 +536,12 @@ class _CameraTabState extends State<_CameraTab> {
           }
         });
       }
+
+      // Geçici dosyayı her durumda sil
+      try {
+        final f = File(imageFile.path);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
     } catch (e) {
       debugPrint('TFLite Frame analizi hatası: $e');
     } finally {
@@ -602,9 +615,12 @@ class _CameraTabState extends State<_CameraTab> {
         if (d.confidence > maxConf) maxConf = d.confidence;
       }
 
+      final bytes = await File(_mediaPath!).readAsBytes();
+      final decodedImage = await decodeImageFromList(bytes);
+
       setState(() {
-        _mediaWidth = 640;
-        _mediaHeight = 640;
+        _mediaWidth = decodedImage.width.toDouble();
+        _mediaHeight = decodedImage.height.toDouble();
         _analysisText =
             'Tespit: ${detections.length} | Güven: ${(maxConf * 100).toStringAsFixed(1)}%';
         _currentDetections = detections;
@@ -900,28 +916,33 @@ class _CameraTabState extends State<_CameraTab> {
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(14),
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final previewSize = Size(
-                              constraints.maxWidth,
-                              constraints.maxHeight,
-                            );
-                            return Stack(
-                              children: [
-                                CameraPreview(_cameraController!),
-                                if (_currentDetections.isNotEmpty)
-                                  DetectionOverlay(
-                                    detections: _currentDetections,
-                                    screenSize: previewSize,
-                                    mediaSize:
-                                        _mediaWidth != null &&
-                                            _mediaHeight != null
-                                        ? Size(_mediaWidth!, _mediaHeight!)
-                                        : null,
-                                  ),
-                              ],
-                            );
-                          },
+                        child: Center(
+                          child: AspectRatio(
+                            // Telefonlarda CameraController aspect ratio ters çalışır çünkü genelde dikey tutulur (portrait).
+                            // Bu yüzden 1 / aspectRatio kullanıyoruz.
+                            aspectRatio:
+                                1 / _cameraController!.value.aspectRatio,
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                final previewSize = Size(
+                                  constraints.maxWidth,
+                                  constraints.maxHeight,
+                                );
+                                return Stack(
+                                  children: [
+                                    CameraPreview(_cameraController!),
+                                    if (_currentDetections.isNotEmpty)
+                                      DetectionOverlay(
+                                        detections: _currentDetections,
+                                        screenSize: previewSize,
+                                        mediaSize:
+                                            null, // Asla scale etme, aspect ratio'ya tam fitecek şekilde
+                                      ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
                         ),
                       ),
                     ),

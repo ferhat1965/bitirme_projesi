@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
@@ -34,130 +34,121 @@ class TFLiteService {
   }
 
   Future<List<Detection>> runImage(String imagePath) async {
-    if (!_isInit || _interpreter == null) {
-      await init();
-      if (!_isInit || _interpreter == null) {
-         throw Exception("Model başlatılamadı!\nSebep: $_initError\n(Uygulamayı tamamen kapatıp açmayı deneyin)");
-      }
+    if (!_isInit) await init();
+
+    if (_interpreter == null) return [];
+
+    try {
+      // Bütün ağır işlemleri (Resim okuma, List oluşturma, TFLite yorumlama) Isolate içine atıyoruz
+      // Böylece Canlı kamerada saniyede 4 kez çağrılsa bile telefon kesinlikle çökmeyecek.
+      return await compute(_processInIsolate, {
+        'imagePath': imagePath,
+        'address': _interpreter!.address,
+        'inputSize': _inputSize,
+      });
+    } catch (e) {
+      debugPrint('TFLite Isolate Hatası: $e');
+      return [];
     }
+  }
+
+  static Future<List<Detection>> _processInIsolate(Map<String, dynamic> params) async {
+    final String imagePath = params['imagePath'];
+    final int address = params['address'];
+    final int size = params['inputSize'];
+
+    // Arka planda modeli adresten tekrar ayağa kaldırıyoruz
+    final interpreter = Interpreter.fromAddress(address);
 
     final bytes = await File(imagePath).readAsBytes();
-    final image = img.decodeImage(bytes);
-    if (image == null) return [];
+    final rawImage = img.decodeImage(bytes);
+    if (rawImage == null) return [];
 
-    return _processImage(image);
-  }
+    // EXIF Rotation problemlerini çözer (Yatay çekilen resimlerin UI'da dikey analiz edilmesi sorunu)
+    final image = img.bakeOrientation(rawImage);
 
-  Future<List<Detection>> runFrame(CameraImage cameraImage) async {
-    if (!_isInit || _interpreter == null) return [];
+    // Görüntüyü YOLOv8 giriş boyutuna göre kare yapıyoruz
+    final inputImage = img.copyResize(image, width: size, height: size);
 
-    // CameraImage -> Image convert (basit YUV420 dönüşümü)
-    // Gerçek performans için platform-channel (Native) kullanılabilir.
-    // Şimdilik dart üzerinden basit dönüşüm veya sadece bytes gönderimi yapılabilir
-    return []; // TODO: Camera frame conversion processing 
-  }
-
-  Future<List<Detection>> _processImage(img.Image image) async {
-      final inputImage = img.copyResize(image, width: _inputSize, height: _inputSize);
-      
-      // Görüntüyü Tensor formuna dönüştür. (Float32, [1, 640, 640, 3])
-      var input = List.generate(
-        1,
-        (i) => List.generate(
-          _inputSize,
-          (y) => List.generate(
-            _inputSize,
-            (x) {
-              final pixel = inputImage.getPixel(x, y);
-              return [
-                pixel.r / 255.0,
-                pixel.g / 255.0,
-                pixel.b / 255.0
-              ];
-            },
-          ),
+    // [1, 640, 640, 3] Tensor formati
+    var input = List.generate(
+      1,
+      (i) => List.generate(
+        size,
+        (y) => List.generate(
+          size,
+          (x) {
+            final pixel = inputImage.getPixel(x, y);
+            return [pixel.r / 255.0, pixel.g / 255.0, pixel.b / 255.0];
+          },
         ),
-      );
+      ),
+    );
 
-      final outputShape = _interpreter!.getOutputTensor(0).shape;
-      
-      // Çıktı formatını modele tam entegre et:
-      // YOLOv8 için genelde [1, 5, 8400] ama export parametresine göre [1, 8400, 5] olabilir
-      var output = List.generate(
-        outputShape[0],
-        (i) => List.generate(
-          outputShape[1],
-          (j) => List.generate(
-             outputShape[2],
-             (k) => 0.0
-          ),
-        ),
-      );
+    final outputShape = interpreter.getOutputTensor(0).shape;
 
-      try {
-        _interpreter!.run(input, output);
-        return _parseOutput(output, outputShape, image.width, image.height);
-      } catch (e) {
-        throw Exception('Shape Hatası:\nModel Shape: ${outputShape}\nHata: $e');
-      }
+    var output = List.generate(
+      outputShape[0],
+      (i) => List.generate(
+        outputShape[1],
+        (j) => List.generate(outputShape[2], (k) => 0.0),
+      ),
+    );
+
+    interpreter.run(input, output);
+
+    return _parseOutput(output, outputShape, size, image.width, image.height);
   }
 
-  List<Detection> _parseOutput(List<dynamic> rawOutput, List<int> shape, int originalWidth, int originalHeight) {
+  static List<Detection> _parseOutput(List<dynamic> rawOutput, List<int> shape, int inputSize, int originalWidth, int originalHeight) {
     List<Detection> list = [];
     final threshold = 0.25;
 
-    final out = rawOutput[0] as List<dynamic>; 
-    
-    // Eğer beklediğimiz YOLOv8 boyutunda değilse (num_classes + 4 sayısı 5 değilse, örneğin 80 classlı bir modelse)
-    if (shape.length < 3) throw Exception("Bilinmeyen Model Şekli: ${shape}");
-    
+    final out = rawOutput[0] as List<dynamic>;
+
+    if (shape.length < 3) return list;
+
     int numClassesAndBbox = shape[1];
     int numBoxes = shape[2];
     bool isFormatA = true;
-    
-    if (shape[1] > 1000) { // [1, 8400, 5] gibi ters matrix
-        numClassesAndBbox = shape[2];
-        numBoxes = shape[1];
-        isFormatA = false;
+
+    if (shape[1] > 1000) {
+      numClassesAndBbox = shape[2];
+      numBoxes = shape[1];
+      isFormatA = false;
     }
 
-    // Güven (Confidence) indexi genelde 4'tür (x,y,w,h, conf)
     int confIndex = 4;
-    if (numClassesAndBbox != 5) {
-       // Eğitim farklı verilmiş olabilir, fırlatıp UI'da boyutunu görelim:
-       throw Exception("Beklenmeyen Sınıf Sayısı: shape[1]=$numClassesAndBbox (Tahminimce ${numClassesAndBbox-4} class var)\nModel Şekli: $shape");
-    }
-
     for (int i = 0; i < numBoxes; i++) {
-        double confidence = isFormatA ? (out[confIndex][i] as double) : (out[i][confIndex] as double);
-        if (confidence > threshold) {
-            double xc = isFormatA ? (out[0][i] as double) : (out[i][0] as double);
-            double yc = isFormatA ? (out[1][i] as double) : (out[i][1] as double);
-            double w  = isFormatA ? (out[2][i] as double) : (out[i][2] as double);
-            double h  = isFormatA ? (out[3][i] as double) : (out[i][3] as double);
+      double confidence = isFormatA ? (out[confIndex][i] as double) : (out[i][confIndex] as double);
+      if (confidence > threshold) {
+        double xc = isFormatA ? (out[0][i] as double) : (out[i][0] as double);
+        double yc = isFormatA ? (out[1][i] as double) : (out[i][1] as double);
+        double w = isFormatA ? (out[2][i] as double) : (out[i][2] as double);
+        double h = isFormatA ? (out[3][i] as double) : (out[i][3] as double);
 
-            // Normalize Koordinatlar YOLO Formatı
-            double nx1 = (xc - w / 2) / _inputSize;
-            double ny1 = (yc - h / 2) / _inputSize;
-            double nx2 = (xc + w / 2) / _inputSize;
-            double ny2 = (yc + h / 2) / _inputSize;
+        // Normalize edilmiş YOLO koordinatları
+        double nx1 = (xc - w / 2) / inputSize;
+        double ny1 = (yc - h / 2) / inputSize;
+        double nx2 = (xc + w / 2) / inputSize;
+        double ny2 = (yc + h / 2) / inputSize;
 
-            list.add(Detection(
-              x1: nx1,
-              y1: ny1,
-              x2: nx2,
-              y2: ny2,
-              confidence: confidence,
-              className: 'pothole',
-            ));
-        }
+        list.add(Detection(
+          x1: nx1,
+          y1: ny1,
+          x2: nx2,
+          y2: ny2,
+          confidence: confidence,
+          className: 'pothole',
+        ));
+      }
     }
 
     // NMS (Non-Maximum Suppression) gerekli olabilir
     return applyNms(list, 0.45);
   }
 
-  List<Detection> applyNms(List<Detection> boxes, double iouThreshold) {
+  static List<Detection> applyNms(List<Detection> boxes, double iouThreshold) {
     if (boxes.isEmpty) return [];
 
     boxes.sort((a, b) => b.confidence.compareTo(a.confidence));
@@ -176,7 +167,7 @@ class TFLiteService {
     return selected;
   }
 
-  double _calculateIou(Detection a, Detection b) {
+  static double _calculateIou(Detection a, Detection b) {
     final interX1 = a.x1 > b.x1 ? a.x1 : b.x1;
     final interY1 = a.y1 > b.y1 ? a.y1 : b.y1;
     final interX2 = a.x2 < b.x2 ? a.x2 : b.x2;
