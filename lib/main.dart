@@ -91,9 +91,7 @@ class Detection {
     this.frame,
   });
 
-  Detection copyWith({
-    int? frame,
-  }) {
+  Detection copyWith({int? frame}) {
     return Detection(
       x1: x1,
       y1: y1,
@@ -337,6 +335,7 @@ class _CameraTabState extends State<_CameraTab> {
   bool _isLiveDetectionActive = false;
   List<Detection> _currentDetections = [];
   Detection? _latestLiveAlert;
+  int? _lastDetectionMs;
   DateTime? _lastDbSaveTime;
 
   Position? _latestPosition;
@@ -464,12 +463,20 @@ class _CameraTabState extends State<_CameraTab> {
         );
 
         if (!mounted || !_isLiveDetectionActive) return;
-        
+
         final int elapsedMs = DateTime.now().millisecondsSinceEpoch - startMs;
         final double fps = elapsedMs > 0 ? (1000 / elapsedMs) : 0;
 
         setState(() {
-          _currentDetections = result.detections;
+          if (result.detections.isNotEmpty) {
+            _currentDetections = result.detections;
+            _lastDetectionMs = DateTime.now().millisecondsSinceEpoch; // Yumuşatma izleyicisi
+          } else {
+            // Motion Blur veya düşük güven nedeniyle 1 frame bile atlanırsa kutu yanıp sönmeyi kessin (Flickering Fix)
+            if (DateTime.now().millisecondsSinceEpoch - (_lastDetectionMs ?? 0) > 300) {
+               _currentDetections = [];
+            }
+          }
           _analysisText = 'TFLite RealTime | Hız: ${elapsedMs}ms (${fps.toStringAsFixed(1)} FPS)';
         });
 
@@ -527,18 +534,18 @@ class _CameraTabState extends State<_CameraTab> {
               bestDet.x2,
               bestDet.y2,
             ]);
-            
+
             // Eğer yeni çukur bulunduysa bildirim ışığını biraz tut:
             Future.delayed(const Duration(seconds: 4), () {
               if (mounted) {
                 setState(() {
-                   _latestLiveAlert = null;
+                  _latestLiveAlert = null;
                 });
               }
             });
             return; // Çakışmamak için çık.
           }
-          
+
           // Zaten kaydedilen (Duplicate) çukurlar veya GPS'siz uyarı
           Future.delayed(const Duration(seconds: 2), () {
             if (mounted) {
@@ -724,7 +731,10 @@ class _CameraTabState extends State<_CameraTab> {
     if (duration != null && duration.inMinutes > 15) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Hata: Video 15 dakikadan uzun olamaz! İşlem sonlandırıldı.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: Text(
+            'Hata: Video 15 dakikadan uzun olamaz! İşlem sonlandırıldı.',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -739,17 +749,28 @@ class _CameraTabState extends State<_CameraTab> {
 
     try {
       final int totalMs = duration?.inMilliseconds ?? 10000;
-      final int step = totalMs ~/ 5; // 4 nokradan örneklem alacağız
-      List<Detection> allDetections = [];
       
+      // Çözüm 2: Videodaki tüm çukurları kaçırmaması için örneklem oranını artırdık!
+      // Eskiden sadece 4 saniyeye bakıyordu, şimdi ise her 1 saniyede bir kesit alacak (Maks 100 kareye kadar).
+      int stepMs = 1500; // Varsayılan: her 1.5 saniyede bir kesit
+      int numFrames = totalMs ~/ stepMs;
+      
+      if (numFrames > 120) {
+         // Çok uzun videolar için maksimum 120 kare (Telefon kitlenmesini önlemek için ~3 dakika sınır)
+         numFrames = 120;
+         stepMs = totalMs ~/ numFrames;
+      }
+      if (numFrames < 4) numFrames = 4; // Çok kısa videolarda en az 4 kesit
+
+      List<Detection> allDetections = [];
       final tempDir = await getTemporaryDirectory();
 
-      for (int i = 1; i <= 4; i++) {
-        final int targetMs = step * i;
+      for (int i = 1; i <= numFrames; i++) {
+        final int targetMs = stepMs * i;
         setState(() {
-           _analysisText = 'Yapay Zeka Video Kesiti İlgileniyor: %${(i * 25)}';
+          _analysisText = 'Yapay Zeka Video Analizi: ${i}/${numFrames} (Lütfen bekleyin)';
         });
-        
+
         final String? path = await vt.VideoThumbnail.thumbnailFile(
           video: _mediaPath!,
           thumbnailPath: tempDir.path,
@@ -757,14 +778,16 @@ class _CameraTabState extends State<_CameraTab> {
           timeMs: targetMs,
           quality: 100,
         );
-        
+
         if (path != null) {
           final detections = await TFLiteService().runImage(path);
           if (detections.isNotEmpty) {
-             for (var d in detections) {
-                // Eski Frontend Video Overlay sistemi için kare indexi hesaplaması
-                allDetections.add(d.copyWith(frame: (targetMs / 1000.0 * 30).round()));
-             }
+            for (var d in detections) {
+              // Eski Frontend Video Overlay sistemi için kare indexi hesaplaması
+              allDetections.add(
+                d.copyWith(frame: (targetMs / 1000.0 * 30).round()),
+              );
+            }
           }
         }
       }
@@ -772,16 +795,18 @@ class _CameraTabState extends State<_CameraTab> {
       setState(() {
         _currentDetections = allDetections;
         if (allDetections.isEmpty) {
-           _analysisText = 'TFLite Video Tespit: 0 | Temiz yol.';
+          _analysisText = 'TFLite Video Tespit: 0 | Temiz yol.';
         } else {
-           _analysisText = 'TFLite Video: ${allDetections.length} Muhtemel Çukur (Oynatın)';
+          _analysisText =
+              'TFLite Video: ${allDetections.length} Muhtemel Çukur (Oynatın)';
         }
       });
-      
     } catch (e) {
       debugPrint("Video Analysis Error: $e");
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Video analizi sırasında bir hata oluştu.')),
+        const SnackBar(
+          content: Text('Video analizi sırasında bir hata oluştu.'),
+        ),
       );
     } finally {
       setState(() {
