@@ -10,9 +10,10 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart' as path_provider;
+import 'package:path_provider/path_provider.dart';
 import 'package:bitirme/services/tflite_service.dart';
 import 'package:bitirme/services/db_helper.dart';
+import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -89,6 +90,20 @@ class Detection {
     required this.className,
     this.frame,
   });
+
+  Detection copyWith({
+    int? frame,
+  }) {
+    return Detection(
+      x1: x1,
+      y1: y1,
+      x2: x2,
+      y2: y2,
+      confidence: confidence,
+      className: className,
+      frame: frame ?? this.frame,
+    );
+  }
 
   factory Detection.fromJson(Map<String, dynamic> json) {
     List<dynamic>? bbox;
@@ -432,128 +447,140 @@ class _CameraTabState extends State<_CameraTab> {
     if (_isLiveDetectionActive) return;
 
     _isLiveDetectionActive = true;
-    _detectionTimer = Timer.periodic(const Duration(milliseconds: 250), (
-      timer,
-    ) {
-      _captureAndAnalyzeFrame();
+    _cameraController!.startImageStream((CameraImage image) async {
+      if (_isAnalyzing || !_isLiveDetectionActive) return;
+      _isAnalyzing = true;
+      final int startMs = DateTime.now().millisecondsSinceEpoch;
+
+      try {
+        final result = await TFLiteService().runFrame(
+          yPlane: image.planes[0].bytes,
+          width: image.width,
+          height: image.height,
+          rowStride: image.planes[0].bytesPerRow,
+          rotation: _cameraController!.description.sensorOrientation,
+          saveImage: true,
+          docDirPath: (await getApplicationDocumentsDirectory()).path,
+        );
+
+        if (!mounted || !_isLiveDetectionActive) return;
+        
+        final int elapsedMs = DateTime.now().millisecondsSinceEpoch - startMs;
+        final double fps = elapsedMs > 0 ? (1000 / elapsedMs) : 0;
+
+        setState(() {
+          _currentDetections = result.detections;
+          _analysisText = 'TFLite RealTime | Hız: ${elapsedMs}ms (${fps.toStringAsFixed(1)} FPS)';
+        });
+
+        if (result.detections.isNotEmpty) {
+          final bestDet = result.detections.reduce(
+            (a, b) => a.confidence > b.confidence ? a : b,
+          );
+
+          bool shouldSaveToDb = false;
+          bool isDuplicate = false;
+
+          if (_lastDbSaveTime == null ||
+              DateTime.now().difference(_lastDbSaveTime!) >
+                  const Duration(milliseconds: 1500)) {
+            shouldSaveToDb = true;
+
+            if (_latestPosition != null && _lastSavedPosition != null) {
+              final distance = Geolocator.distanceBetween(
+                _lastSavedPosition!.latitude,
+                _lastSavedPosition!.longitude,
+                _latestPosition!.latitude,
+                _latestPosition!.longitude,
+              );
+              if (distance < 10.0) {
+                shouldSaveToDb = false;
+                isDuplicate = true;
+              }
+            }
+          }
+
+          setState(() {
+            _latestLiveAlert = bestDet;
+            _isDuplicateWait = isDuplicate;
+          });
+
+          if (shouldSaveToDb && result.savedImagePath != null) {
+            _lastDbSaveTime = DateTime.now();
+            if (_latestPosition != null) {
+              _lastSavedPosition = _latestPosition;
+            }
+
+            final pr = PotholeRecord(
+              id: 0,
+              imagePath: result.savedImagePath!,
+              location: "Canlı Tarama GPS",
+              timestamp: DateTime.now(),
+              confidence: bestDet.confidence,
+              size: "Tahmini",
+              latitude: _latestPosition?.latitude,
+              longitude: _latestPosition?.longitude,
+            );
+            await DatabaseHelper.instance.insertRecord(pr, [
+              bestDet.x1,
+              bestDet.y1,
+              bestDet.x2,
+              bestDet.y2,
+            ]);
+            
+            // Eğer yeni çukur bulunduysa bildirim ışığını biraz tut:
+            Future.delayed(const Duration(seconds: 4), () {
+              if (mounted) {
+                setState(() {
+                   _latestLiveAlert = null;
+                });
+              }
+            });
+            return; // Çakışmamak için çık.
+          }
+          
+          // Zaten kaydedilen (Duplicate) çukurlar veya GPS'siz uyarı
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) {
+              setState(() {
+                _latestLiveAlert = null;
+                _isDuplicateWait = false;
+              });
+            }
+          });
+        }
+      } catch (e) {
+        debugPrint('Canlı Tarama Hatası: $e');
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isAnalyzing = false;
+          });
+        }
+      }
     });
   }
 
   void _stopLiveDetection() {
     _isLiveDetectionActive = false;
-    _detectionTimer?.cancel();
-    _detectionTimer = null;
+    if (_cameraController != null &&
+        _cameraController!.value.isStreamingImages) {
+      _cameraController!.stopImageStream();
+    }
     setState(() {
       _currentDetections = [];
       _mediaWidth = null;
       _mediaHeight = null;
+      _latestLiveAlert = null;
     });
   }
 
-  Future<void> _captureAndAnalyzeFrame() async {
-    if (!mounted || _isAnalyzing || !_isLiveDetectionActive) return;
-    if (_cameraController == null || !_cameraController!.value.isInitialized)
-      return;
-
-    _isAnalyzing = true;
-    try {
-      final XFile imageFile = await _cameraController!.takePicture();
-      final detections = await TFLiteService().runImage(imageFile.path);
-
-      if (!mounted) return;
-      if (!_isLiveDetectionActive) return;
-
-      setState(() {
-        _currentDetections = detections;
-      });
-
-      if (_isLiveDetectionActive && _currentDetections.isNotEmpty) {
-        final bestDet = _currentDetections.first;
-
-        bool shouldSaveToDb = false;
-        bool isDuplicate = false;
-        if (_lastDbSaveTime == null ||
-            DateTime.now().difference(_lastDbSaveTime!) >
-                const Duration(milliseconds: 1500)) {
-          shouldSaveToDb = true;
-
-          if (_latestPosition != null && _lastSavedPosition != null) {
-            final distance = Geolocator.distanceBetween(
-              _lastSavedPosition!.latitude,
-              _lastSavedPosition!.longitude,
-              _latestPosition!.latitude,
-              _latestPosition!.longitude,
-            );
-            if (distance < 10.0) {
-              shouldSaveToDb = false;
-              isDuplicate = true;
-            }
-          }
-        }
-
-        setState(() {
-          _latestLiveAlert = bestDet;
-          _isDuplicateWait = isDuplicate;
-        });
-
-        if (shouldSaveToDb) {
-          _lastDbSaveTime = DateTime.now();
-          if (_latestPosition != null) {
-            _lastSavedPosition = _latestPosition;
-          }
-
-          // Resmi kalıcı olarak kaydet
-          final directory = await path_provider
-              .getApplicationDocumentsDirectory();
-          final savedImagePath =
-              '${directory.path}/pothole_${DateTime.now().millisecondsSinceEpoch}.jpg';
-          await File(imageFile.path).copy(savedImagePath);
-
-          final pr = PotholeRecord(
-            id: 0,
-            imagePath: savedImagePath,
-            location: "Yerel Sensör (TFLite)",
-            timestamp: DateTime.now(),
-            confidence: bestDet.confidence,
-            size: "Tahmini",
-            latitude: _latestPosition?.latitude,
-            longitude: _latestPosition?.longitude,
-          );
-          await DatabaseHelper.instance.insertRecord(pr, [
-            bestDet.x1,
-            bestDet.y1,
-            bestDet.x2,
-            bestDet.y2,
-          ]);
-        }
-
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) {
-            setState(() {
-              _latestLiveAlert = null;
-              _isDuplicateWait = false;
-            });
-          }
-        });
-      }
-
-      // Geçici dosyayı her durumda sil
-      try {
-        final f = File(imageFile.path);
-        if (await f.exists()) await f.delete();
-      } catch (_) {}
-    } catch (e) {
-      debugPrint('TFLite Frame analizi hatası: $e');
-    } finally {
-      if (mounted)
-        setState(() {
-          _isAnalyzing = false;
-        });
-    }
-  }
-
   Future<void> _pickImage() async {
-    final picked = await _picker.pickImage(source: ImageSource.gallery);
+    final picked = await _picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 800,
+      maxHeight: 800,
+    );
     if (picked != null) {
       setState(() {
         _mediaPath = picked.path;
@@ -693,16 +720,74 @@ class _CameraTabState extends State<_CameraTab> {
   Future<void> _analyzeVideo() async {
     if (_mediaPath == null || !_isVideo) return;
 
-    // TFLite offline video analysis requires native buffering
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Çevrimdışı (TFLite) modunda video analizi desteklenmemektedir. Mobil kullanım için Canlı Kamera veya Resim modunu tercih ediniz.',
+    final duration = _videoController?.value.duration;
+    if (duration != null && duration.inMinutes > 15) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hata: Video 15 dakikadan uzun olamaz! İşlem sonlandırıldı.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          backgroundColor: Colors.red,
         ),
-        duration: Duration(seconds: 4),
-        backgroundColor: Colors.orange,
-      ),
-    );
+      );
+      return;
+    }
+
+    setState(() {
+      _isAnalyzing = true;
+      _analysisText = 'Offline Video AI Başlatıldı... (Lütfen bekleyin)';
+      _currentDetections = [];
+    });
+
+    try {
+      final int totalMs = duration?.inMilliseconds ?? 10000;
+      final int step = totalMs ~/ 5; // 4 nokradan örneklem alacağız
+      List<Detection> allDetections = [];
+      
+      final tempDir = await getTemporaryDirectory();
+
+      for (int i = 1; i <= 4; i++) {
+        final int targetMs = step * i;
+        setState(() {
+           _analysisText = 'Yapay Zeka Video Kesiti İlgileniyor: %${(i * 25)}';
+        });
+        
+        final String? path = await vt.VideoThumbnail.thumbnailFile(
+          video: _mediaPath!,
+          thumbnailPath: tempDir.path,
+          imageFormat: vt.ImageFormat.JPEG,
+          timeMs: targetMs,
+          quality: 100,
+        );
+        
+        if (path != null) {
+          final detections = await TFLiteService().runImage(path);
+          if (detections.isNotEmpty) {
+             for (var d in detections) {
+                // Eski Frontend Video Overlay sistemi için kare indexi hesaplaması
+                allDetections.add(d.copyWith(frame: (targetMs / 1000.0 * 30).round()));
+             }
+          }
+        }
+      }
+
+      setState(() {
+        _currentDetections = allDetections;
+        if (allDetections.isEmpty) {
+           _analysisText = 'TFLite Video Tespit: 0 | Temiz yol.';
+        } else {
+           _analysisText = 'TFLite Video: ${allDetections.length} Muhtemel Çukur (Oynatın)';
+        }
+      });
+      
+    } catch (e) {
+      debugPrint("Video Analysis Error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video analizi sırasında bir hata oluştu.')),
+      );
+    } finally {
+      setState(() {
+        _isAnalyzing = false;
+      });
+    }
   }
 
   void _toggleSystem() {
@@ -1083,7 +1168,7 @@ class _CameraTabState extends State<_CameraTab> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             child: ElevatedButton.icon(
-              onPressed: _isAnalyzing
+              onPressed: (_isAnalyzing && widget.cameraMode != 0)
                   ? null
                   : () {
                       switch (widget.cameraMode) {
