@@ -83,16 +83,16 @@ CREATE TABLE records (
       final bboxList = List<double>.from(jsonDecode(bboxStr));
       
       return PotholeRecord(
-        id: json['id'] as int,
-        imagePath: json['image_path'] as String,
+        id: json['id'] as int? ?? 0,
+        imagePath: (json['image_path'] as String?) ?? '',
         location: (json['location'] as String?) ?? ((json['latitude'] != null && json['longitude'] != null)
-            ? '${(json['latitude'] as double).toStringAsFixed(5)}° N, ${(json['longitude'] as double).toStringAsFixed(5)}° E'
+            ? '${(json['latitude'] as num).toDouble().toStringAsFixed(5)}° N, ${(json['longitude'] as num).toDouble().toStringAsFixed(5)}° E'
             : 'Bilinmeyen Konum'),
-        timestamp: DateTime.parse(json['detected_at'] as String).toLocal(),
-        confidence: json['confidence'] as double,
+        timestamp: DateTime.tryParse(json['detected_at'] as String? ?? '')?.toLocal() ?? DateTime.now(),
+        confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
         size: _getSizeFromBbox(bboxList),
-        latitude: json['latitude'] as double?,
-        longitude: json['longitude'] as double?,
+        latitude: (json['latitude'] as num?)?.toDouble(),
+        longitude: (json['longitude'] as num?)?.toDouble(),
       );
     }).toList();
   }

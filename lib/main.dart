@@ -2019,14 +2019,23 @@ class _RecordsTabState extends State<_RecordsTab> {
                                     errorBuilder: (context, err, stack) =>
                                         _buildPlaceholder(),
                                   )
-                                : Image.asset(
-                                    item.imagePath,
-                                    width: 100,
-                                    height: 100,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, err, stack) =>
-                                        _buildPlaceholder(),
-                                  ),
+                                : (item.imagePath.startsWith('/') || item.imagePath.contains(':')) 
+                                    ? Image.file(
+                                        File(item.imagePath),
+                                        width: 100,
+                                        height: 100,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (context, err, stack) =>
+                                            _buildPlaceholder(),
+                                      )
+                                    : Image.asset(
+                                        item.imagePath,
+                                        width: 100,
+                                        height: 100,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (context, err, stack) =>
+                                            _buildPlaceholder(),
+                                      ),
                           ),
                         ),
                         Expanded(
@@ -2755,15 +2764,25 @@ class DetailScreen extends StatelessWidget {
                           color: isDark ? Colors.white24 : Colors.black26,
                         ),
                       )
-                    : Image.asset(
-                        record.imagePath,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, err, stack) => Icon(
-                          Icons.broken_image,
-                          size: 80,
-                          color: isDark ? Colors.white24 : Colors.black26,
-                        ),
-                      ),
+                    : (record.imagePath.startsWith('/') || record.imagePath.contains(':'))
+                        ? Image.file(
+                            File(record.imagePath),
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, err, stack) => Icon(
+                              Icons.broken_image,
+                              size: 80,
+                              color: isDark ? Colors.white24 : Colors.black26,
+                            ),
+                          )
+                        : Image.asset(
+                            record.imagePath,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, err, stack) => Icon(
+                              Icons.broken_image,
+                              size: 80,
+                              color: isDark ? Colors.white24 : Colors.black26,
+                            ),
+                          ),
               ),
               title: Container(
                 padding: const EdgeInsets.symmetric(
