@@ -596,6 +596,7 @@ class _CameraTabState extends State<_CameraTab> {
                   const Duration(milliseconds: 1500)) {
             shouldSaveToDb = true;
 
+            // MESAFE KONTROLÜ: 2 metre sınırı ve 15 saniyelik zaman aşımı (Stationary testing fix)
             if (_latestPosition != null && _lastSavedPosition != null) {
               final distance = Geolocator.distanceBetween(
                 _lastSavedPosition!.latitude,
@@ -603,7 +604,11 @@ class _CameraTabState extends State<_CameraTab> {
                 _latestPosition!.latitude,
                 _latestPosition!.longitude,
               );
-              if (distance < 10.0) {
+              
+              bool isTimeOverride = _lastDbSaveTime != null && 
+                  DateTime.now().difference(_lastDbSaveTime!).inSeconds > 15;
+
+              if (distance < 2.0 && !isTimeOverride) {
                 shouldSaveToDb = false;
                 isDuplicate = true;
               }
@@ -1176,89 +1181,94 @@ class _CameraTabState extends State<_CameraTab> {
                     right: 16,
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 400),
-                      child: _latestLiveAlert != null
-                          ? Container(
-                              key: const ValueKey('alertBox'),
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 12,
-                                horizontal: 16,
-                              ),
-                              decoration: BoxDecoration(
-                                color: _isDuplicateWait
-                                    ? Colors.orange.withOpacity(0.90)
-                                    : Theme.of(context).primaryColor.withOpacity(0.95),
-                                borderRadius: BorderRadius.circular(12),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: _isDuplicateWait
-                                        ? Colors.orange.withOpacity(0.4)
-                                        : Colors.blueAccent.withOpacity(0.4),
-                                    blurRadius: 10,
-                                    spreadRadius: 2,
-                                  ),
-                                ],
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    _isDuplicateWait
-                                        ? Icons.info_outline
-                                        : Icons.warning_amber_rounded,
-                                    color: Colors.white,
-                                    size: 28,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          _isDuplicateWait
-                                              ? 'Aynı Çukur Tespit Edildi'
-                                              : 'Çukur Kaydedildi!',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                        Text(
-                                          _isDuplicateWait
-                                              ? 'G: %${(_latestLiveAlert!.confidence * 100).toStringAsFixed(1)} | Zaten kaydedildi'
-                                              : 'G: %${(_latestLiveAlert!.confidence * 100).toStringAsFixed(1)} | Veritabanına aktarıldı',
-                                          style: const TextStyle(
-                                            color: Colors.white70,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : Container(
-                              key: const ValueKey('scanningBox'),
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 6,
-                                horizontal: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.redAccent.withOpacity(0.8),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Text(
-                                'CANLI TARAMA AKTİF',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                  letterSpacing: 1.2,
+                      child: Builder(builder: (context) {
+                        final alert = _latestLiveAlert; // Yerel kopyalama (Race condition önleyici)
+                        if (alert != null) {
+                          return Container(
+                            key: const ValueKey('alertBox'),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 16,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _isDuplicateWait
+                                  ? Colors.orange.withOpacity(0.90)
+                                  : Theme.of(context).primaryColor.withOpacity(0.95),
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: _isDuplicateWait
+                                      ? Colors.orange.withOpacity(0.4)
+                                      : Colors.blueAccent.withOpacity(0.4),
+                                  blurRadius: 10,
+                                  spreadRadius: 2,
                                 ),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  _isDuplicateWait
+                                      ? Icons.info_outline
+                                      : Icons.warning_amber_rounded,
+                                  color: Colors.white,
+                                  size: 28,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        _isDuplicateWait
+                                            ? 'Aynı Çukur Tespit Edildi'
+                                            : 'Çukur Kaydedildi!',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      Text(
+                                        _isDuplicateWait
+                                            ? 'G: %${(alert.confidence * 100).toStringAsFixed(1)} | Zaten kaydedildi'
+                                            : 'G: %${(alert.confidence * 100).toStringAsFixed(1)} | Veritabanına aktarıldı',
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        } else {
+                          return Container(
+                            key: const ValueKey('scanningBox'),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 6,
+                              horizontal: 12,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent.withOpacity(0.8),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text(
+                              'CANLI TARAMA AKTİF',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                                letterSpacing: 1.2,
                               ),
                             ),
+                          );
+                        }
+                      }),
                     ),
                   ),
               ],
@@ -1874,48 +1884,49 @@ class _RecordsTabState extends State<_RecordsTab> {
                     color: textColor,
                   ),
                 ),
-                Row(
-                  children: [
-                    if (_isSelectionMode)
-                      OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.blueAccent),
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            if (_selectedIds.length == widget.records.length) {
-                              _selectedIds.clear();
-                            } else {
-                              _selectedIds.addAll(widget.records.map((e) => e.id));
-                            }
-                          });
-                        },
-                        icon: Icon(
-                          _selectedIds.length == widget.records.length ? Icons.deselect : Icons.select_all,
-                          color: Colors.blueAccent,
-                          size: 18,
-                        ),
-                        label: Text(
-                          _selectedIds.length == widget.records.length ? 'Temizle' : 'Tümünü Seç',
-                          style: const TextStyle(
-                            color: Colors.blueAccent,
-                            fontSize: 14,
-                          ),
-                        ),
+                const Spacer(),
+                if (_isSelectionMode) ...[
+                  Flexible(
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.blueAccent),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
                       ),
-                    const SizedBox(width: 8),
-                    TextButton(
-                      onPressed: _toggleSelectionMode,
-                      child: Text(
-                        _isSelectionMode ? 'İptal' : 'Seç',
+                      onPressed: () {
+                        setState(() {
+                          if (_selectedIds.length == widget.records.length) {
+                            _selectedIds.clear();
+                          } else {
+                            _selectedIds.addAll(widget.records.map((e) => e.id));
+                          }
+                        });
+                      },
+                      icon: Icon(
+                        _selectedIds.length == widget.records.length ? Icons.deselect : Icons.select_all,
+                        color: Colors.blueAccent,
+                        size: 16,
+                      ),
+                      label: Text(
+                        _selectedIds.length == widget.records.length ? 'Temizle' : 'Tümünü Seç',
                         style: const TextStyle(
                           color: Colors.blueAccent,
-                          fontSize: 16,
+                          fontSize: 12,
                         ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                  ],
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                TextButton(
+                  onPressed: _toggleSelectionMode,
+                  child: Text(
+                    _isSelectionMode ? 'İptal' : 'Seç',
+                    style: const TextStyle(
+                      color: Colors.blueAccent,
+                      fontSize: 16,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -2752,38 +2763,40 @@ class DetailScreen extends StatelessWidget {
             pinned: true,
             backgroundColor: Theme.of(context).primaryColor,
             flexibleSpace: FlexibleSpaceBar(
-              background: Hero(
-                tag: 'record_image_${record.id}',
-                child: record.imagePath.startsWith('http')
-                    ? Image.network(
-                        record.imagePath,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, err, stack) => Icon(
-                          Icons.broken_image,
-                          size: 80,
-                          color: isDark ? Colors.white24 : Colors.black26,
-                        ),
-                      )
-                    : (record.imagePath.startsWith('/') || record.imagePath.contains(':'))
-                        ? Image.file(
-                            File(record.imagePath),
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, err, stack) => Icon(
-                              Icons.broken_image,
-                              size: 80,
-                              color: isDark ? Colors.white24 : Colors.black26,
-                            ),
-                          )
-                        : Image.asset(
-                            record.imagePath,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, err, stack) => Icon(
-                              Icons.broken_image,
-                              size: 80,
-                              color: isDark ? Colors.white24 : Colors.black26,
-                            ),
-                          ),
-              ),
+              background: record.imagePath.isEmpty
+                  ? Container(color: Colors.grey, child: const Icon(Icons.image_not_supported, size: 80))
+                  : Hero(
+                      tag: 'record_image_${record.id}',
+                      child: record.imagePath.startsWith('http')
+                          ? Image.network(
+                              record.imagePath,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, err, stack) => Icon(
+                                Icons.broken_image,
+                                size: 80,
+                                color: isDark ? Colors.white24 : Colors.black26,
+                              ),
+                            )
+                          : (record.imagePath.startsWith('/') || record.imagePath.contains(':'))
+                              ? Image.file(
+                                  File(record.imagePath),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, err, stack) => Icon(
+                                    Icons.broken_image,
+                                    size: 80,
+                                    color: isDark ? Colors.white24 : Colors.black26,
+                                  ),
+                                )
+                              : Image.asset(
+                                  record.imagePath,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, err, stack) => Icon(
+                                    Icons.broken_image,
+                                    size: 80,
+                                    color: isDark ? Colors.white24 : Colors.black26,
+                                  ),
+                                ),
+                    ),
               title: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
@@ -3137,16 +3150,19 @@ class DetectionOverlay extends StatelessWidget {
     double offsetX = 0;
     double offsetY = 0;
 
-    if (mediaSize != null && mediaSize!.width > 0 && mediaSize!.height > 0) {
-      final scale = min(
-        screenSize.width / mediaSize!.width,
-        screenSize.height / mediaSize!.height,
-      );
-      final renderWidth = mediaSize!.width * scale;
-      final renderHeight = mediaSize!.height * scale;
-      offsetX = (screenSize.width - renderWidth) / 2;
-      offsetY = (screenSize.height - renderHeight) / 2;
-      actualScreenSize = Size(renderWidth, renderHeight);
+    if (mediaSize != null) {
+      final mSize = mediaSize!;
+      if (mSize.width > 0 && mSize.height > 0) {
+        final scale = min(
+          screenSize.width / mSize.width,
+          screenSize.height / mSize.height,
+        );
+        final renderWidth = mSize.width * scale;
+        final renderHeight = mSize.height * scale;
+        offsetX = (screenSize.width - renderWidth) / 2;
+        offsetY = (screenSize.height - renderHeight) / 2;
+        actualScreenSize = Size(renderWidth, renderHeight);
+      }
     }
 
     return Stack(
