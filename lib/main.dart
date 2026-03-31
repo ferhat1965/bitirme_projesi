@@ -9,6 +9,7 @@ import 'package:video_player/video_player.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:bitirme/services/tflite_service.dart';
@@ -341,7 +342,7 @@ class _CameraTabState extends State<_CameraTab> {
   Position? _latestPosition;
   Position? _lastSavedPosition;
   bool _isDuplicateWait = false;
-  Timer? _gpsTimer;
+  StreamSubscription<Position>? _positionStreamSubscription;
 
   // Video Analizi yeni listesi
   List<VideoDetectionItem> _videoDetectionsList = [];
@@ -353,6 +354,7 @@ class _CameraTabState extends State<_CameraTab> {
   @override
   void initState() {
     super.initState();
+    TFLiteService().init(); // Modelin kamera açılmadan önce arkaplanda hazır olmasını sağla
     _initializeCamera();
     _requestLocationPermission();
   }
@@ -367,26 +369,85 @@ class _CameraTabState extends State<_CameraTab> {
     _startGpsTracker();
   }
 
-  void _startGpsTracker() {
-    _updateLocation();
-    _gpsTimer = Timer.periodic(
-      const Duration(seconds: 10),
-      (_) => _updateLocation(),
-    );
+  Future<String> _getLocationString(Position? pos, String fallback) async {
+    if (pos == null) return "GPS Sinyali Bekleniyor...";
+    
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        pos.latitude,
+        pos.longitude,
+      ).timeout(const Duration(seconds: 3));
+      
+      if (placemarks.isNotEmpty) {
+        final pm = placemarks.first;
+        
+        List<String> addressParts = [];
+        
+        // Sokak veya Cadde adı
+        if (pm.street != null && pm.street!.isNotEmpty && pm.street != pm.subLocality) {
+          addressParts.add(pm.street!);
+        } else if (pm.thoroughfare != null && pm.thoroughfare!.isNotEmpty) {
+           addressParts.add(pm.thoroughfare!);
+        }
+        
+        // Mahalle veya Semt
+        if (pm.subLocality != null && pm.subLocality!.isNotEmpty) {
+          addressParts.add(pm.subLocality!);
+        }
+        
+        // İlçe / Şehir
+        if (pm.subAdministrativeArea != null && pm.subAdministrativeArea!.isNotEmpty) {
+          addressParts.add(pm.subAdministrativeArea!);
+        } else if (pm.locality != null && pm.locality!.isNotEmpty) {
+          addressParts.add(pm.locality!);
+        }
+        
+        // İl
+        if (pm.administrativeArea != null && pm.administrativeArea!.isNotEmpty) {
+          addressParts.add(pm.administrativeArea!);
+        }
+
+        if (addressParts.isNotEmpty) {
+          return addressParts.join(", ");
+        }
+      }
+    } catch (_) {}
+    
+    return '${pos.latitude.toStringAsFixed(5)}° N, ${pos.longitude.toStringAsFixed(5)}° E';
   }
 
-  Future<void> _updateLocation() async {
+  void _startGpsTracker() async {
     try {
       final perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.whileInUse ||
-          perm == LocationPermission.always) {
-        final last = await Geolocator.getLastKnownPosition();
-        if (last != null) _latestPosition = last;
-        final current = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.medium,
-          timeLimit: const Duration(seconds: 4),
-        );
-        _latestPosition = current;
+      if (perm == LocationPermission.whileInUse || perm == LocationPermission.always) {
+        
+        // İçerideysen GPS fix alamaz, o yüzden önbellekteki son konumu hemen al:
+        final last = await Geolocator.getLastKnownPosition().catchError((_) => null);
+        if (last != null) {
+          _latestPosition = last;
+        }
+        
+        Position? current;
+        try {
+          current = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.bestForNavigation,
+            timeLimit: const Duration(seconds: 4),
+          );
+        } catch (_) {}
+        
+        if (current != null) {
+          _latestPosition = current;
+        }
+
+        // Anlık konum değişimi akışını dinle (10 saniyelik Timer yerine %100 anlık gerçek konum)
+        _positionStreamSubscription = Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 0, // Her metrede veya harekette anında tetiklenir
+          ),
+        ).listen((Position position) {
+          _latestPosition = position;
+        });
       }
     } catch (_) {}
   }
@@ -416,7 +477,7 @@ class _CameraTabState extends State<_CameraTab> {
   void dispose() {
     _isLiveDetectionActive = false;
     _detectionTimer?.cancel();
-    _gpsTimer?.cancel();
+    _positionStreamSubscription?.cancel();
     _cameraController?.dispose();
     _cameraController = null;
     _videoController?.dispose();
@@ -518,10 +579,15 @@ class _CameraTabState extends State<_CameraTab> {
               _lastSavedPosition = _latestPosition;
             }
 
+            final String liveLocName = await _getLocationString(
+                _latestPosition, 
+                "Canlı Tarama GPS",
+            );
+
             final pr = PotholeRecord(
               id: 0,
               imagePath: result.savedImagePath!,
-              location: "Canlı Tarama GPS",
+              location: liveLocName,
               timestamp: DateTime.now(),
               confidence: bestDet.confidence,
               size: "Tahmini",
@@ -1743,15 +1809,48 @@ class _RecordsTabState extends State<_RecordsTab> {
                     color: Colors.white,
                   ),
                 ),
-                TextButton(
-                  onPressed: _toggleSelectionMode,
-                  child: Text(
-                    _isSelectionMode ? 'İptal' : 'Seç',
-                    style: const TextStyle(
-                      color: Colors.blueAccent,
-                      fontSize: 16,
+                Row(
+                  children: [
+                    if (_isSelectionMode)
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.blueAccent),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            if (_selectedIds.length == widget.records.length) {
+                              _selectedIds.clear();
+                            } else {
+                              _selectedIds.addAll(widget.records.map((e) => e.id));
+                            }
+                          });
+                        },
+                        icon: Icon(
+                          _selectedIds.length == widget.records.length ? Icons.deselect : Icons.select_all,
+                          color: Colors.blueAccent,
+                          size: 18,
+                        ),
+                        label: Text(
+                          _selectedIds.length == widget.records.length ? 'Temizle' : 'Tümünü Seç',
+                          style: const TextStyle(
+                            color: Colors.blueAccent,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: _toggleSelectionMode,
+                      child: Text(
+                        _isSelectionMode ? 'İptal' : 'Seç',
+                        style: const TextStyle(
+                          color: Colors.blueAccent,
+                          fontSize: 16,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ],
             ),

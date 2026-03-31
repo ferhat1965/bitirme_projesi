@@ -20,7 +20,16 @@ class DatabaseHelper {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path, 
+      version: 2, 
+      onCreate: _createDB,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE records ADD COLUMN location TEXT;');
+        }
+      }
+    );
   }
 
   Future _createDB(Database db, int version) async {
@@ -33,7 +42,8 @@ CREATE TABLE records (
   confidence REAL NOT NULL,
   class_name TEXT NOT NULL,
   image_path TEXT NOT NULL,
-  bbox TEXT NOT NULL
+  bbox TEXT NOT NULL,
+  location TEXT
 )
 ''');
   }
@@ -48,6 +58,7 @@ CREATE TABLE records (
       'class_name': 'pothole',
       'image_path': record.imagePath,
       'bbox': jsonEncode(bbox),
+      'location': record.location,
     };
 
     final id = await db.insert('records', data);
@@ -74,7 +85,9 @@ CREATE TABLE records (
       return PotholeRecord(
         id: json['id'] as int,
         imagePath: json['image_path'] as String,
-        location: 'Kayıtlı Konum', // Gerçek ters konum (reverse geocode) main.dart içinde çözülebilir
+        location: (json['location'] as String?) ?? ((json['latitude'] != null && json['longitude'] != null)
+            ? '${(json['latitude'] as double).toStringAsFixed(5)}° N, ${(json['longitude'] as double).toStringAsFixed(5)}° E'
+            : 'Bilinmeyen Konum'),
         timestamp: DateTime.parse(json['detected_at'] as String).toLocal(),
         confidence: json['confidence'] as double,
         size: _getSizeFromBbox(bboxList),
