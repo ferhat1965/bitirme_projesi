@@ -1001,9 +1001,9 @@ class _CameraTabState extends State<_CameraTab> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(width: 60, height: 1, color: Colors.white24),
+                      Container(width: 60, height: 1, color: Theme.of(context).dividerColor.withOpacity(0.5)),
                       const SizedBox(height: 4),
-                      Container(width: 1, height: 60, color: Colors.white24),
+                      Container(width: 1, height: 60, color: Theme.of(context).dividerColor.withOpacity(0.5)),
                     ],
                   ),
                 ),
@@ -1368,8 +1368,8 @@ class _CameraTabState extends State<_CameraTab> {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               child: Text(
                 _analysisText!,
-                style: const TextStyle(
-                  color: Colors.white70,
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.8),
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -2149,13 +2149,14 @@ class _RecordsTabState extends State<_RecordsTab> {
   }
 
   Widget _buildPlaceholder() {
+    bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: 100,
       height: 100,
       color: Theme.of(context).cardColor,
       child: Icon(
         Icons.image_not_supported,
-        color: Theme.of(context).brightness == Brightness.dark ? Colors.white24 : Colors.black26,
+        color: isDark ? Colors.white24 : Colors.black26,
         size: 30,
       ),
     );
@@ -2189,7 +2190,7 @@ class _ProfileTabState extends State<_ProfileTab> {
 
   Future<void> _editName() async {
     TextEditingController controller = TextEditingController(text: _userName);
-    bool isDark = themeNotifier.value == ThemeMode.dark;
+    bool isDark = Theme.of(context).brightness == Brightness.dark;
     Color dialogTextColor = isDark ? Colors.white : Colors.black87;
 
     final newName = await showDialog<String>(
@@ -2245,7 +2246,7 @@ class _ProfileTabState extends State<_ProfileTab> {
 
   @override
   Widget build(BuildContext context) {
-    bool isDark = themeNotifier.value == ThemeMode.dark;
+    bool isDark = Theme.of(context).brightness == Brightness.dark;
     Color textColor = isDark ? Colors.white : Colors.black87;
     Color subTextColor = isDark ? Colors.white70 : Colors.black54;
 
@@ -2421,7 +2422,7 @@ class _ProfileStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    bool isDark = themeNotifier.value == ThemeMode.dark;
+    bool isDark = Theme.of(context).brightness == Brightness.dark;
     
     return Container(
       height: 90,
