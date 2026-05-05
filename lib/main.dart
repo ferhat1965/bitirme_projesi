@@ -20,11 +20,11 @@ import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   final prefs = await SharedPreferences.getInstance();
   final isDark = prefs.getBool('isDark') ?? true;
   themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
-  
+
   runApp(const RoadGuardApp());
 }
 
@@ -54,7 +54,7 @@ class RoadGuardApp extends StatelessWidget {
             textTheme: const TextTheme(
               bodyLarge: TextStyle(color: Colors.black87),
               bodyMedium: TextStyle(color: Colors.black87),
-            )
+            ),
           ),
           darkTheme: ThemeData.dark().copyWith(
             scaffoldBackgroundColor: const Color(0xFF080C18),
@@ -310,7 +310,10 @@ class _MainTabsState extends State<MainTabs> {
               label: 'Kamera',
             ),
             BottomNavigationBarItem(icon: Icon(Icons.map), label: 'Harita'),
-            BottomNavigationBarItem(icon: Icon(Icons.history), label: 'Kayıtlar'),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.history),
+              label: 'Kayıtlar',
+            ),
             BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profil'),
           ],
         ),
@@ -339,9 +342,9 @@ class _StatusToken extends StatelessWidget {
         Text(
           text,
           style: TextStyle(
-            fontWeight: FontWeight.w600, 
+            fontWeight: FontWeight.w600,
             fontSize: 13,
-            color: Theme.of(context).textTheme.bodyLarge?.color
+            color: Theme.of(context).textTheme.bodyLarge?.color,
           ),
         ),
       ],
@@ -396,7 +399,8 @@ class _CameraTabState extends State<_CameraTab> {
   @override
   void initState() {
     super.initState();
-    TFLiteService().init(); // Modelin kamera açılmadan önce arkaplanda hazır olmasını sağla
+    TFLiteService()
+        .init(); // Modelin kamera açılmadan önce arkaplanda hazır olmasını sağla
     _initializeCamera();
     _requestLocationPermission();
   }
@@ -413,39 +417,43 @@ class _CameraTabState extends State<_CameraTab> {
 
   Future<String> _getLocationString(Position? pos, String fallback) async {
     if (pos == null) return "GPS Sinyali Bekleniyor...";
-    
+
     try {
       List<Placemark> placemarks = await placemarkFromCoordinates(
         pos.latitude,
         pos.longitude,
       ).timeout(const Duration(seconds: 3));
-      
+
       if (placemarks.isNotEmpty) {
         final pm = placemarks.first;
-        
+
         List<String> addressParts = [];
-        
+
         // Sokak veya Cadde adı
-        if (pm.street != null && pm.street!.isNotEmpty && pm.street != pm.subLocality) {
+        if (pm.street != null &&
+            pm.street!.isNotEmpty &&
+            pm.street != pm.subLocality) {
           addressParts.add(pm.street!);
         } else if (pm.thoroughfare != null && pm.thoroughfare!.isNotEmpty) {
-           addressParts.add(pm.thoroughfare!);
+          addressParts.add(pm.thoroughfare!);
         }
-        
+
         // Mahalle veya Semt
         if (pm.subLocality != null && pm.subLocality!.isNotEmpty) {
           addressParts.add(pm.subLocality!);
         }
-        
+
         // İlçe / Şehir
-        if (pm.subAdministrativeArea != null && pm.subAdministrativeArea!.isNotEmpty) {
+        if (pm.subAdministrativeArea != null &&
+            pm.subAdministrativeArea!.isNotEmpty) {
           addressParts.add(pm.subAdministrativeArea!);
         } else if (pm.locality != null && pm.locality!.isNotEmpty) {
           addressParts.add(pm.locality!);
         }
-        
+
         // İl
-        if (pm.administrativeArea != null && pm.administrativeArea!.isNotEmpty) {
+        if (pm.administrativeArea != null &&
+            pm.administrativeArea!.isNotEmpty) {
           addressParts.add(pm.administrativeArea!);
         }
 
@@ -454,21 +462,23 @@ class _CameraTabState extends State<_CameraTab> {
         }
       }
     } catch (_) {}
-    
+
     return '${pos.latitude.toStringAsFixed(5)}° N, ${pos.longitude.toStringAsFixed(5)}° E';
   }
 
   void _startGpsTracker() async {
     try {
       final perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.whileInUse || perm == LocationPermission.always) {
-        
+      if (perm == LocationPermission.whileInUse ||
+          perm == LocationPermission.always) {
         // İçerideysen GPS fix alamaz, o yüzden önbellekteki son konumu hemen al:
-        final last = await Geolocator.getLastKnownPosition().catchError((_) => null);
+        final last = await Geolocator.getLastKnownPosition().catchError(
+          (_) => null,
+        );
         if (last != null) {
           _latestPosition = last;
         }
-        
+
         Position? current;
         try {
           current = await Geolocator.getCurrentPosition(
@@ -476,20 +486,22 @@ class _CameraTabState extends State<_CameraTab> {
             timeLimit: const Duration(seconds: 4),
           );
         } catch (_) {}
-        
+
         if (current != null) {
           _latestPosition = current;
         }
 
         // Anlık konum değişimi akışını dinle (10 saniyelik Timer yerine %100 anlık gerçek konum)
-        _positionStreamSubscription = Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.bestForNavigation,
-            distanceFilter: 0, // Her metrede veya harekette anında tetiklenir
-          ),
-        ).listen((Position position) {
-          _latestPosition = position;
-        });
+        _positionStreamSubscription =
+            Geolocator.getPositionStream(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.bestForNavigation,
+                distanceFilter:
+                    0, // Her metrede veya harekette anında tetiklenir
+              ),
+            ).listen((Position position) {
+              _latestPosition = position;
+            });
       }
     } catch (_) {}
   }
@@ -573,14 +585,18 @@ class _CameraTabState extends State<_CameraTab> {
         setState(() {
           if (result.detections.isNotEmpty) {
             _currentDetections = result.detections;
-            _lastDetectionMs = DateTime.now().millisecondsSinceEpoch; // Yumuşatma izleyicisi
+            _lastDetectionMs =
+                DateTime.now().millisecondsSinceEpoch; // Yumuşatma izleyicisi
           } else {
             // Motion Blur veya düşük güven nedeniyle 1 frame bile atlanırsa kutu yanıp sönmeyi kessin (Flickering Fix)
-            if (DateTime.now().millisecondsSinceEpoch - (_lastDetectionMs ?? 0) > 300) {
-               _currentDetections = [];
+            if (DateTime.now().millisecondsSinceEpoch -
+                    (_lastDetectionMs ?? 0) >
+                300) {
+              _currentDetections = [];
             }
           }
-          _analysisText = 'TFLite RealTime | Hız: ${elapsedMs}ms (${fps.toStringAsFixed(1)} FPS)';
+          _analysisText =
+              'TFLite RealTime | Hız: ${elapsedMs}ms (${fps.toStringAsFixed(1)} FPS)';
         });
 
         if (result.detections.isNotEmpty) {
@@ -604,8 +620,9 @@ class _CameraTabState extends State<_CameraTab> {
                 _latestPosition!.latitude,
                 _latestPosition!.longitude,
               );
-              
-              bool isTimeOverride = _lastDbSaveTime != null && 
+
+              bool isTimeOverride =
+                  _lastDbSaveTime != null &&
                   DateTime.now().difference(_lastDbSaveTime!).inSeconds > 15;
 
               if (distance < 2.0 && !isTimeOverride) {
@@ -627,8 +644,8 @@ class _CameraTabState extends State<_CameraTab> {
             }
 
             final String liveLocName = await _getLocationString(
-                _latestPosition, 
-                "Canlı Tarama GPS",
+              _latestPosition,
+              "Canlı Tarama GPS",
             );
 
             final pr = PotholeRecord(
@@ -862,16 +879,16 @@ class _CameraTabState extends State<_CameraTab> {
 
     try {
       final int totalMs = duration?.inMilliseconds ?? 10000;
-      
+
       // Çözüm 2: Videodaki tüm çukurları kaçırmaması için örneklem oranını artırdık!
       // Eskiden sadece 4 saniyeye bakıyordu, şimdi ise her 1 saniyede bir kesit alacak (Maks 100 kareye kadar).
       int stepMs = 1500; // Varsayılan: her 1.5 saniyede bir kesit
       int numFrames = totalMs ~/ stepMs;
-      
+
       if (numFrames > 120) {
-         // Çok uzun videolar için maksimum 120 kare (Telefon kitlenmesini önlemek için ~3 dakika sınır)
-         numFrames = 120;
-         stepMs = totalMs ~/ numFrames;
+        // Çok uzun videolar için maksimum 120 kare (Telefon kitlenmesini önlemek için ~3 dakika sınır)
+        numFrames = 120;
+        stepMs = totalMs ~/ numFrames;
       }
       if (numFrames < 4) numFrames = 4; // Çok kısa videolarda en az 4 kesit
 
@@ -881,7 +898,8 @@ class _CameraTabState extends State<_CameraTab> {
       for (int i = 1; i <= numFrames; i++) {
         final int targetMs = stepMs * i;
         setState(() {
-          _analysisText = 'Yapay Zeka Video Analizi: ${i}/${numFrames} (Lütfen bekleyin)';
+          _analysisText =
+              'Yapay Zeka Video Analizi: ${i}/${numFrames} (Lütfen bekleyin)';
         });
 
         final String? path = await vt.VideoThumbnail.thumbnailFile(
@@ -965,9 +983,17 @@ class _CameraTabState extends State<_CameraTab> {
               decoration: BoxDecoration(
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.05)),
-                boxShadow: Theme.of(context).brightness == Brightness.light 
-                    ? [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))]
+                border: Border.all(
+                  color: Theme.of(context).dividerColor.withOpacity(0.05),
+                ),
+                boxShadow: Theme.of(context).brightness == Brightness.light
+                    ? [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ]
                     : null,
               ),
               child: Row(
@@ -980,7 +1006,9 @@ class _CameraTabState extends State<_CameraTab> {
                   ),
                   _StatusToken(
                     icon: Icons.location_on,
-                    color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                    color:
+                        Theme.of(context).textTheme.bodyLarge?.color ??
+                        Colors.white,
                     text: 'Güçlü Sinyal',
                   ),
                 ],
@@ -1006,9 +1034,17 @@ class _CameraTabState extends State<_CameraTab> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(width: 60, height: 1, color: Theme.of(context).dividerColor.withOpacity(0.5)),
+                      Container(
+                        width: 60,
+                        height: 1,
+                        color: Theme.of(context).dividerColor.withOpacity(0.5),
+                      ),
                       const SizedBox(height: 4),
-                      Container(width: 1, height: 60, color: Theme.of(context).dividerColor.withOpacity(0.5)),
+                      Container(
+                        width: 1,
+                        height: 60,
+                        color: Theme.of(context).dividerColor.withOpacity(0.5),
+                      ),
                     ],
                   ),
                 ),
@@ -1181,94 +1217,99 @@ class _CameraTabState extends State<_CameraTab> {
                     right: 16,
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 400),
-                      child: Builder(builder: (context) {
-                        final alert = _latestLiveAlert; // Yerel kopyalama (Race condition önleyici)
-                        if (alert != null) {
-                          return Container(
-                            key: const ValueKey('alertBox'),
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 12,
-                              horizontal: 16,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _isDuplicateWait
-                                  ? Colors.orange.withOpacity(0.90)
-                                  : Theme.of(context).primaryColor.withOpacity(0.95),
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: _isDuplicateWait
-                                      ? Colors.orange.withOpacity(0.4)
-                                      : Colors.blueAccent.withOpacity(0.4),
-                                  blurRadius: 10,
-                                  spreadRadius: 2,
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  _isDuplicateWait
-                                      ? Icons.info_outline
-                                      : Icons.warning_amber_rounded,
-                                  color: Colors.white,
-                                  size: 28,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        _isDuplicateWait
-                                            ? 'Aynı Çukur Tespit Edildi'
-                                            : 'Çukur Kaydedildi!',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      Text(
-                                        _isDuplicateWait
-                                            ? 'G: %${(alert.confidence * 100).toStringAsFixed(1)} | Zaten kaydedildi'
-                                            : 'G: %${(alert.confidence * 100).toStringAsFixed(1)} | Veritabanına aktarıldı',
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        } else {
-                          return Container(
-                            key: const ValueKey('scanningBox'),
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 6,
-                              horizontal: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.redAccent.withOpacity(0.8),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Text(
-                              'CANLI TARAMA AKTİF',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                                letterSpacing: 1.2,
+                      child: Builder(
+                        builder: (context) {
+                          final alert =
+                              _latestLiveAlert; // Yerel kopyalama (Race condition önleyici)
+                          if (alert != null) {
+                            return Container(
+                              key: const ValueKey('alertBox'),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                                horizontal: 16,
                               ),
-                            ),
-                          );
-                        }
-                      }),
+                              decoration: BoxDecoration(
+                                color: _isDuplicateWait
+                                    ? Colors.orange.withOpacity(0.90)
+                                    : Theme.of(
+                                        context,
+                                      ).primaryColor.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: _isDuplicateWait
+                                        ? Colors.orange.withOpacity(0.4)
+                                        : Colors.blueAccent.withOpacity(0.4),
+                                    blurRadius: 10,
+                                    spreadRadius: 2,
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    _isDuplicateWait
+                                        ? Icons.info_outline
+                                        : Icons.warning_amber_rounded,
+                                    color: Colors.white,
+                                    size: 28,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          _isDuplicateWait
+                                              ? 'Aynı Çukur Tespit Edildi'
+                                              : 'Çukur Kaydedildi!',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        Text(
+                                          _isDuplicateWait
+                                              ? 'G: %${(alert.confidence * 100).toStringAsFixed(1)} | Zaten kaydedildi'
+                                              : 'G: %${(alert.confidence * 100).toStringAsFixed(1)} | Veritabanına aktarıldı',
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          } else {
+                            return Container(
+                              key: const ValueKey('scanningBox'),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 6,
+                                horizontal: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.redAccent.withOpacity(0.8),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Text(
+                                'CANLI TARAMA AKTİF',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                      ),
                     ),
                   ),
               ],
@@ -1280,9 +1321,17 @@ class _CameraTabState extends State<_CameraTab> {
             decoration: BoxDecoration(
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.1)),
-              boxShadow: Theme.of(context).brightness == Brightness.light 
-                  ? [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))]
+              border: Border.all(
+                color: Theme.of(context).dividerColor.withOpacity(0.1),
+              ),
+              boxShadow: Theme.of(context).brightness == Brightness.light
+                  ? [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
                   : null,
             ),
             child: Row(
@@ -1304,9 +1353,12 @@ class _CameraTabState extends State<_CameraTab> {
                         child: Text(
                           modes[idx],
                           style: TextStyle(
-                            color: active 
-                                ? Colors.white 
-                                : (Theme.of(context).brightness == Brightness.dark ? Colors.white70 : Colors.black54),
+                            color: active
+                                ? Colors.white
+                                : (Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? Colors.white70
+                                      : Colors.black54),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -1369,7 +1421,9 @@ class _CameraTabState extends State<_CameraTab> {
                 minimumSize: const Size.fromHeight(56),
                 backgroundColor: const Color(0xFF307BFF),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
             ),
           ),
@@ -1379,7 +1433,9 @@ class _CameraTabState extends State<_CameraTab> {
               child: Text(
                 _analysisText!,
                 style: TextStyle(
-                  color: Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.8),
+                  color: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.color?.withOpacity(0.8),
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1753,8 +1809,14 @@ class _MapTabState extends State<_MapTab> {
               decoration: BoxDecoration(
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(14),
-                boxShadow: Theme.of(context).brightness == Brightness.light 
-                    ? [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))]
+                boxShadow: Theme.of(context).brightness == Brightness.light
+                    ? [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ]
                     : null,
               ),
               child: Row(
@@ -1782,8 +1844,8 @@ class _MapTabState extends State<_MapTab> {
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: Theme.of(context).dividerColor.withOpacity(0.1), 
-                  width: 1.1
+                  color: Theme.of(context).dividerColor.withOpacity(0.1),
+                  width: 1.1,
                 ),
               ),
               child: ClipRRect(
@@ -1793,12 +1855,14 @@ class _MapTabState extends State<_MapTab> {
                   options: MapOptions(
                     center: LatLng(41.0082, 28.9784),
                     zoom: 14.0,
-                    maxZoom: 20.0, // Gereğinden fazla Zoom'da siyah ekrana düşmeyi engeller
+                    maxZoom:
+                        20.0, // Gereğinden fazla Zoom'da siyah ekrana düşmeyi engeller
                   ),
                   children: [
                     TileLayer(
                       // Google Haritalar (Uydu + Yol İsimleri) En detaylı bina ve cadde haritası
-                      urlTemplate: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+                      urlTemplate:
+                          'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
                       userAgentPackageName: 'com.example.bitirme',
                       maxZoom: 20.0,
                       maxNativeZoom: 19,
@@ -1854,7 +1918,9 @@ class _RecordsTabState extends State<_RecordsTab> {
   @override
   Widget build(BuildContext context) {
     bool isDark = Theme.of(context).brightness == Brightness.dark;
-    Color textColor = Theme.of(context).textTheme.bodyLarge?.color ?? (isDark ? Colors.white : Colors.black87);
+    Color textColor =
+        Theme.of(context).textTheme.bodyLarge?.color ??
+        (isDark ? Colors.white : Colors.black87);
     Color subTextColor = isDark ? Colors.white54 : Colors.black54;
 
     if (widget.records.isEmpty) {
@@ -1890,24 +1956,33 @@ class _RecordsTabState extends State<_RecordsTab> {
                     child: OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.blueAccent),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 0,
+                        ),
                       ),
                       onPressed: () {
                         setState(() {
                           if (_selectedIds.length == widget.records.length) {
                             _selectedIds.clear();
                           } else {
-                            _selectedIds.addAll(widget.records.map((e) => e.id));
+                            _selectedIds.addAll(
+                              widget.records.map((e) => e.id),
+                            );
                           }
                         });
                       },
                       icon: Icon(
-                        _selectedIds.length == widget.records.length ? Icons.deselect : Icons.select_all,
+                        _selectedIds.length == widget.records.length
+                            ? Icons.deselect
+                            : Icons.select_all,
                         color: Colors.blueAccent,
                         size: 16,
                       ),
                       label: Text(
-                        _selectedIds.length == widget.records.length ? 'Temizle' : 'Tümünü Seç',
+                        _selectedIds.length == widget.records.length
+                            ? 'Temizle'
+                            : 'Tümünü Seç',
                         style: const TextStyle(
                           color: Colors.blueAccent,
                           fontSize: 12,
@@ -1989,7 +2064,9 @@ class _RecordsTabState extends State<_RecordsTab> {
                     margin: const EdgeInsets.only(bottom: 12),
                     decoration: BoxDecoration(
                       color: isSelected
-                          ? (isDark ? const Color(0xFF1E355A) : const Color(0xFFE2E8F0))
+                          ? (isDark
+                                ? const Color(0xFF1E355A)
+                                : const Color(0xFFE2E8F0))
                           : Theme.of(context).cardColor,
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
@@ -1998,9 +2075,15 @@ class _RecordsTabState extends State<_RecordsTab> {
                             : Colors.transparent,
                         width: 2,
                       ),
-                      boxShadow: isDark 
-                          ? null 
-                          : [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))],
+                      boxShadow: isDark
+                          ? null
+                          : [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
                     ),
                     child: Row(
                       children: [
@@ -2030,23 +2113,24 @@ class _RecordsTabState extends State<_RecordsTab> {
                                     errorBuilder: (context, err, stack) =>
                                         _buildPlaceholder(),
                                   )
-                                : (item.imagePath.startsWith('/') || item.imagePath.contains(':')) 
-                                    ? Image.file(
-                                        File(item.imagePath),
-                                        width: 100,
-                                        height: 100,
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (context, err, stack) =>
-                                            _buildPlaceholder(),
-                                      )
-                                    : Image.asset(
-                                        item.imagePath,
-                                        width: 100,
-                                        height: 100,
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (context, err, stack) =>
-                                            _buildPlaceholder(),
-                                      ),
+                                : (item.imagePath.startsWith('/') ||
+                                      item.imagePath.contains(':'))
+                                ? Image.file(
+                                    File(item.imagePath),
+                                    width: 100,
+                                    height: 100,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, err, stack) =>
+                                        _buildPlaceholder(),
+                                  )
+                                : Image.asset(
+                                    item.imagePath,
+                                    width: 100,
+                                    height: 100,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, err, stack) =>
+                                        _buildPlaceholder(),
+                                  ),
                           ),
                         ),
                         Expanded(
@@ -2224,19 +2308,33 @@ class _ProfileTabState extends State<_ProfileTab> {
             style: TextStyle(color: dialogTextColor),
             decoration: InputDecoration(
               hintText: 'Yeni isminizi girin',
-              hintStyle: TextStyle(color: isDark ? Colors.white54 : Colors.black45),
-              enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.blueAccent)),
-              focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.blue)),
+              hintStyle: TextStyle(
+                color: isDark ? Colors.white54 : Colors.black45,
+              ),
+              enabledBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.blueAccent),
+              ),
+              focusedBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.blue),
+              ),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text('İptal', style: TextStyle(color: isDark ? Colors.white54 : Colors.black54)),
+              child: Text(
+                'İptal',
+                style: TextStyle(
+                  color: isDark ? Colors.white54 : Colors.black54,
+                ),
+              ),
             ),
             TextButton(
               onPressed: () => Navigator.pop(context, controller.text),
-              child: const Text('Kaydet', style: TextStyle(color: Colors.blueAccent)),
+              child: const Text(
+                'Kaydet',
+                style: TextStyle(color: Colors.blueAccent),
+              ),
             ),
           ],
         );
@@ -2282,8 +2380,12 @@ class _ProfileTabState extends State<_ProfileTab> {
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [
-                  BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))
-                ]
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2310,8 +2412,12 @@ class _ProfileTabState extends State<_ProfileTab> {
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))
-              ]
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
             child: Row(
               children: [
@@ -2321,12 +2427,18 @@ class _ProfileTabState extends State<_ProfileTab> {
                     children: [
                       CircleAvatar(
                         radius: 32,
-                        backgroundColor: isDark ? const Color(0xFF243A5A) : Colors.blue.withOpacity(0.1),
+                        backgroundColor: isDark
+                            ? const Color(0xFF243A5A)
+                            : Colors.blue.withOpacity(0.1),
                         backgroundImage: _profileImagePath != null
                             ? FileImage(File(_profileImagePath!))
                             : null,
                         child: _profileImagePath == null
-                            ? Icon(Icons.person, size: 30, color: isDark ? Colors.white : Colors.blue)
+                            ? Icon(
+                                Icons.person,
+                                size: 30,
+                                color: isDark ? Colors.white : Colors.blue,
+                              )
                             : null,
                       ),
                       Positioned(
@@ -2338,7 +2450,11 @@ class _ProfileTabState extends State<_ProfileTab> {
                             shape: BoxShape.circle,
                             color: Colors.blueAccent,
                           ),
-                          child: const Icon(Icons.edit, size: 12, color: Colors.white),
+                          child: const Icon(
+                            Icons.edit,
+                            size: 12,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ],
@@ -2364,7 +2480,11 @@ class _ProfileTabState extends State<_ProfileTab> {
                             ),
                           ),
                           IconButton(
-                            icon: Icon(Icons.edit, size: 18, color: subTextColor),
+                            icon: Icon(
+                              Icons.edit,
+                              size: 18,
+                              color: subTextColor,
+                            ),
                             onPressed: _editName,
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
@@ -2399,10 +2519,12 @@ class _ProfileTabState extends State<_ProfileTab> {
           const SizedBox(height: 16),
           SwitchListTile(
             title: Text(
-              'Karanlık Tema', 
+              'Karanlık Tema',
               style: TextStyle(
-                 color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white
-              )
+                color:
+                    Theme.of(context).textTheme.bodyLarge?.color ??
+                    Colors.white,
+              ),
             ),
             value: themeNotifier.value == ThemeMode.dark,
             onChanged: (value) async {
@@ -2443,28 +2565,35 @@ class _ProfileStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     bool isDark = Theme.of(context).brightness == Brightness.dark;
-    
+
     return Container(
       height: 90,
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))
-        ]
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: TextStyle(color: isDark ? Colors.white70 : Colors.black54)),
+          Text(
+            title,
+            style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+          ),
           const Spacer(),
           Text(
             value,
             style: TextStyle(
-              fontSize: 24, 
+              fontSize: 24,
               fontWeight: FontWeight.bold,
-              color: isDark ? Colors.white : Colors.black87
+              color: isDark ? Colors.white : Colors.black87,
             ),
           ),
         ],
@@ -2516,14 +2645,18 @@ class _DetectionScreenState extends State<DetectionScreen> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
               color: Colors.black,
-              border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.2)),
+              border: Border.all(
+                color: Theme.of(context).dividerColor.withOpacity(0.2),
+              ),
             ),
             child: Stack(
               children: [
                 Center(
                   child: Text(
                     'Kamera Önizlemesi',
-                    style: TextStyle(color: isDark ? Colors.white54 : Colors.white70),
+                    style: TextStyle(
+                      color: isDark ? Colors.white54 : Colors.white70,
+                    ),
                   ),
                 ),
                 if (isDetecting && detected != null) ...[
@@ -2563,13 +2696,17 @@ class _DetectionScreenState extends State<DetectionScreen> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 12),
-            color: isDetecting ? Colors.redAccent : (isDark ? const Color(0xFF173455) : Colors.blue.shade100),
+            color: isDetecting
+                ? Colors.redAccent
+                : (isDark ? const Color(0xFF173455) : Colors.blue.shade100),
             child: Center(
               child: Text(
                 overlayText,
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
-                  color: isDetecting ? Colors.white : (isDark ? Colors.white : Colors.blue.shade900),
+                  color: isDetecting
+                      ? Colors.white
+                      : (isDark ? Colors.white : Colors.blue.shade900),
                 ),
               ),
             ),
@@ -2637,12 +2774,24 @@ class MapScreen extends StatelessWidget {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(16),
                   color: Theme.of(context).cardColor,
-                  boxShadow: Theme.of(context).brightness == Brightness.light 
-                      ? [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))]
+                  boxShadow: Theme.of(context).brightness == Brightness.light
+                      ? [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
                       : null,
                 ),
                 child: Center(
-                  child: Icon(Icons.map, size: 80, color: Theme.of(context).brightness == Brightness.dark ? Colors.white24 : Colors.black12),
+                  child: Icon(
+                    Icons.map,
+                    size: 80,
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white24
+                        : Colors.black12,
+                  ),
                 ),
               ),
             ),
@@ -2653,19 +2802,31 @@ class MapScreen extends StatelessWidget {
                   final record = sampleRecords[index];
                   return ListTile(
                     tileColor: Theme.of(context).cardColor,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     leading: const Icon(
                       Icons.location_on,
                       color: Colors.redAccent,
                     ),
-                    title: Text(record.location, style: TextStyle(color: Theme.of(context).textTheme.bodyLarge?.color)),
+                    title: Text(
+                      record.location,
+                      style: TextStyle(
+                        color: Theme.of(context).textTheme.bodyLarge?.color,
+                      ),
+                    ),
                     subtitle: Text(
                       '${record.formattedDate} ${record.formattedTime} - ${record.size}',
-                      style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
+                      style: TextStyle(
+                        color: Theme.of(context).textTheme.bodySmall?.color,
+                      ),
                     ),
                     trailing: Text(
                       '${(record.confidence * 100).toStringAsFixed(0)}%',
-                      style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        color: Colors.redAccent,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     onTap: () => Navigator.pushNamed(
                       context,
@@ -2707,7 +2868,11 @@ class RecordsScreen extends StatelessWidget {
             elevation: isDark ? 0 : 2,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
-              side: isDark ? BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.1)) : BorderSide.none,
+              side: isDark
+                  ? BorderSide(
+                      color: Theme.of(context).dividerColor.withOpacity(0.1),
+                    )
+                  : BorderSide.none,
             ),
             margin: const EdgeInsets.only(bottom: 10),
             child: ListTile(
@@ -2715,10 +2880,15 @@ class RecordsScreen extends StatelessWidget {
                 width: 52,
                 height: 52,
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF1E355A) : Colors.blue.withOpacity(0.1),
+                  color: isDark
+                      ? const Color(0xFF1E355A)
+                      : Colors.blue.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(Icons.image, color: isDark ? Colors.white70 : Colors.blue),
+                child: Icon(
+                  Icons.image,
+                  color: isDark ? Colors.white70 : Colors.blue,
+                ),
               ),
               title: Text(
                 record.location,
@@ -2763,11 +2933,14 @@ class DetailScreen extends StatelessWidget {
             pinned: true,
             backgroundColor: Theme.of(context).primaryColor,
             flexibleSpace: FlexibleSpaceBar(
-              background: record.imagePath.isEmpty
-                  ? Container(color: Colors.grey, child: const Icon(Icons.image_not_supported, size: 80))
+              background: (record.imagePath.isEmpty)
+                  ? Container(
+                      color: Colors.grey,
+                      child: const Icon(Icons.image_not_supported, size: 80),
+                    )
                   : Hero(
                       tag: 'record_image_${record.id}',
-                      child: record.imagePath.startsWith('http')
+                      child: (record.imagePath.contains('http'))
                           ? Image.network(
                               record.imagePath,
                               fit: BoxFit.cover,
@@ -2777,25 +2950,27 @@ class DetailScreen extends StatelessWidget {
                                 color: isDark ? Colors.white24 : Colors.black26,
                               ),
                             )
-                          : (record.imagePath.startsWith('/') || record.imagePath.contains(':'))
-                              ? Image.file(
-                                  File(record.imagePath),
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, err, stack) => Icon(
-                                    Icons.broken_image,
-                                    size: 80,
-                                    color: isDark ? Colors.white24 : Colors.black26,
-                                  ),
-                                )
-                              : Image.asset(
-                                  record.imagePath,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, err, stack) => Icon(
-                                    Icons.broken_image,
-                                    size: 80,
-                                    color: isDark ? Colors.white24 : Colors.black26,
-                                  ),
-                                ),
+                          : (record.imagePath.contains('/') ||
+                                record.imagePath.contains('\\') ||
+                                record.imagePath.contains(':'))
+                          ? Image.file(
+                              File(record.imagePath),
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, err, stack) => Icon(
+                                Icons.broken_image,
+                                size: 80,
+                                color: isDark ? Colors.white24 : Colors.black26,
+                              ),
+                            )
+                          : Image.asset(
+                              record.imagePath,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, err, stack) => Icon(
+                                Icons.broken_image,
+                                size: 80,
+                                color: isDark ? Colors.white24 : Colors.black26,
+                              ),
+                            ),
                     ),
               title: Container(
                 padding: const EdgeInsets.symmetric(
@@ -2808,7 +2983,11 @@ class DetailScreen extends StatelessWidget {
                 ),
                 child: const Text(
                   'Çukur Detayı',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: Colors.white,
+                  ),
                 ),
               ),
               centerTitle: true,
@@ -2838,10 +3017,7 @@ class DetailScreen extends StatelessWidget {
                     const SizedBox(width: 6),
                     Text(
                       '${record.formattedDate} - ${record.formattedTime}',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: subTextColor,
-                      ),
+                      style: TextStyle(fontSize: 16, color: subTextColor),
                     ),
                   ],
                 ),
@@ -2933,7 +3109,10 @@ class DetailScreen extends StatelessWidget {
                   ),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    side: BorderSide(color: isDark ? Colors.white24 : Colors.black12, width: 1.5),
+                    side: BorderSide(
+                      color: isDark ? Colors.white24 : Colors.black12,
+                      width: 1.5,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),
@@ -2961,14 +3140,18 @@ class DetailScreen extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.1)),
-        boxShadow: isDark ? null : [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            offset: const Offset(0, 4),
-            blurRadius: 10,
-          ),
-        ],
+        border: Border.all(
+          color: Theme.of(context).dividerColor.withOpacity(0.1),
+        ),
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  offset: const Offset(0, 4),
+                  blurRadius: 10,
+                ),
+              ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3030,14 +3213,28 @@ class ProfileScreen extends StatelessWidget {
             decoration: BoxDecoration(
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(14),
-              boxShadow: isDark ? null : [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))],
+              boxShadow: isDark
+                  ? null
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
             ),
             child: Row(
               children: [
                 CircleAvatar(
                   radius: 32,
-                  backgroundColor: isDark ? const Color(0xFF1E2B45) : Colors.blue.withOpacity(0.1),
-                  child: Icon(Icons.person, size: 34, color: isDark ? Colors.white : Colors.blue),
+                  backgroundColor: isDark
+                      ? const Color(0xFF1E2B45)
+                      : Colors.blue.withOpacity(0.1),
+                  child: Icon(
+                    Icons.person,
+                    size: 34,
+                    color: isDark ? Colors.white : Colors.blue,
+                  ),
                 ),
                 const SizedBox(width: 14),
                 Column(
@@ -3054,7 +3251,9 @@ class ProfileScreen extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       'Öncü Sürücü',
-                      style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+                      style: TextStyle(
+                        color: isDark ? Colors.white70 : Colors.black54,
+                      ),
                     ),
                   ],
                 ),
@@ -3109,14 +3308,27 @@ class _ProfileMetric extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.1)),
-        boxShadow: isDark ? null : [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))],
+        border: Border.all(
+          color: Theme.of(context).dividerColor.withOpacity(0.1),
+        ),
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: TextStyle(color: isDark ? Colors.white70 : Colors.black54)),
+          Text(
+            title,
+            style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+          ),
           const Spacer(),
           Text(
             value,

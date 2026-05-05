@@ -84,11 +84,12 @@ CREATE TABLE records (
       
       return PotholeRecord(
         id: json['id'] as int? ?? 0,
-        imagePath: (json['image_path'] as String?) ?? '',
-        location: (json['location'] as String?) ?? ((json['latitude'] != null && json['longitude'] != null)
-            ? '${(json['latitude'] as num).toDouble().toStringAsFixed(5)}° N, ${(json['longitude'] as num).toDouble().toStringAsFixed(5)}° E'
-            : 'Bilinmeyen Konum'),
-        timestamp: DateTime.tryParse(json['detected_at'] as String? ?? '')?.toLocal() ?? DateTime.now(),
+        imagePath: (json['image_path'] as String?)?.toString() ?? '',
+        location: (json['location'] as String?)?.toString() ?? 
+            ((json['latitude'] != null && json['longitude'] != null)
+                ? '${(json['latitude'] as num).toDouble().toStringAsFixed(5)}° N, ${(json['longitude'] as num).toDouble().toStringAsFixed(5)}° E'
+                : 'Bilinmeyen Konum'),
+        timestamp: DateTime.tryParse(json['detected_at']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
         confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
         size: _getSizeFromBbox(bboxList),
         latitude: (json['latitude'] as num?)?.toDouble(),
