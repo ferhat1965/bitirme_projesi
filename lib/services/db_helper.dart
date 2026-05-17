@@ -120,4 +120,9 @@ CREATE TABLE records (
     }
     await batch.commit(noResult: true);
   }
+
+  Future<void> clearAll() async {
+    final db = await instance.database;
+    await db.delete('records');
+  }
 }

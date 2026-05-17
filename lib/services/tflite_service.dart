@@ -139,7 +139,7 @@ class TFLiteService {
     String? savedPath;
     if (saveImage && detections.isNotEmpty && docDirPath != null) {
       final bestDet = detections.reduce((a, b) => a.confidence > b.confidence ? a : b);
-      if (bestDet.confidence >= 0.25) {
+      if (bestDet.confidence >= 0.55) {
         img.Image image = img.Image(width: width, height: height, numChannels: 3);
         for (int yy = 0; yy < height; yy++) {
           int offset = yy * rowStride;
@@ -227,7 +227,7 @@ class TFLiteService {
 
   static List<Detection> _parseOutput1D(Float32List outputBuffer, List<int> shape, int inputSize, int originalWidth, int originalHeight) {
     List<Detection> list = [];
-    final threshold = 0.25;
+    final threshold = 0.55;
 
     if (shape.length < 3) return list;
 
@@ -241,11 +241,26 @@ class TFLiteService {
       isFormatA = false;
     }
 
-    int confIndex = 4;
+    int numClasses = numClassesAndBbox - 4;
+    if (numClasses < 1) numClasses = 1;
+
     for (int i = 0; i < numBoxes; i++) {
-      double confidence = isFormatA ? outputBuffer[confIndex * numBoxes + i] : outputBuffer[i * numClassesAndBbox + confIndex];
+      double maxClassConf = -1.0;
+      int maxClassIndex = -1;
+
+      for (int c = 0; c < numClasses; c++) {
+        int cIndex = 4 + c;
+        double conf = isFormatA 
+            ? outputBuffer[cIndex * numBoxes + i] 
+            : outputBuffer[i * numClassesAndBbox + cIndex];
+            
+        if (conf > maxClassConf) {
+          maxClassConf = conf;
+          maxClassIndex = c;
+        }
+      }
       
-      if (confidence > threshold) {
+      if (maxClassConf > threshold) {
         double xc = isFormatA ? outputBuffer[0 * numBoxes + i] : outputBuffer[i * numClassesAndBbox + 0];
         double yc = isFormatA ? outputBuffer[1 * numBoxes + i] : outputBuffer[i * numClassesAndBbox + 1];
         double w  = isFormatA ? outputBuffer[2 * numBoxes + i] : outputBuffer[i * numClassesAndBbox + 2];
@@ -263,13 +278,20 @@ class TFLiteService {
         nx2 = nx2.clamp(0.0, 1.0);
         ny2 = ny2.clamp(0.0, 1.0);
 
+        String detectedClass = 'Çukur';
+        if (numClasses > 1) {
+           if (maxClassIndex == 0) detectedClass = 'Çukur';
+           else if (maxClassIndex == 1) detectedClass = 'Kasis';
+           else detectedClass = 'Sınıf $maxClassIndex';
+        }
+
         list.add(Detection(
           x1: nx1,
           y1: ny1,
           x2: nx2,
           y2: ny2,
-          confidence: confidence,
-          className: 'pothole',
+          confidence: maxClassConf,
+          className: detectedClass,
         ));
       }
     }

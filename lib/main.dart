@@ -386,6 +386,7 @@ class _CameraTabState extends State<_CameraTab> {
 
   Position? _latestPosition;
   Position? _lastSavedPosition;
+  Position? _prevKmPosition; // KM hesaplama için önceki konum
   bool _isDuplicateWait = false;
   StreamSubscription<Position>? _positionStreamSubscription;
 
@@ -413,6 +414,18 @@ class _CameraTabState extends State<_CameraTab> {
       permission = await Geolocator.requestPermission();
     }
     _startGpsTracker();
+  }
+
+  Future<void> _incrementTespitCount() async {
+    final prefs = await SharedPreferences.getInstance();
+    int current = prefs.getInt('profile_tespit') ?? 0;
+    await prefs.setInt('profile_tespit', current + 1);
+  }
+
+  Future<void> _addKmDistance(double km) async {
+    final prefs = await SharedPreferences.getInstance();
+    double current = prefs.getDouble('profile_km') ?? 0.0;
+    await prefs.setDouble('profile_km', current + km);
   }
 
   Future<String> _getLocationString(Position? pos, String fallback) async {
@@ -483,7 +496,9 @@ class _CameraTabState extends State<_CameraTab> {
         try {
           current = await Geolocator.getCurrentPosition(
             desiredAccuracy: LocationAccuracy.bestForNavigation,
-            timeLimit: const Duration(seconds: 4),
+            timeLimit: const Duration(
+              seconds: 10,
+            ), // Daha isabetli (yüksek doğrulukta) GPS verisi için süreyi uzattık
           );
         } catch (_) {}
 
@@ -500,6 +515,19 @@ class _CameraTabState extends State<_CameraTab> {
                     0, // Her metrede veya harekette anında tetiklenir
               ),
             ).listen((Position position) {
+              // KM hesaplama: önceki konumla mesafeyi hesapla
+              if (_prevKmPosition != null && _isLiveDetectionActive) {
+                final dist = Geolocator.distanceBetween(
+                  _prevKmPosition!.latitude,
+                  _prevKmPosition!.longitude,
+                  position.latitude,
+                  position.longitude,
+                );
+                if (dist > 1.0 && dist < 500) { // 1m-500m arası makul hareket
+                  _addKmDistance(dist / 1000.0); // metre -> km
+                }
+              }
+              _prevKmPosition = position;
               _latestPosition = position;
             });
       }
@@ -664,6 +692,7 @@ class _CameraTabState extends State<_CameraTab> {
               bestDet.x2,
               bestDet.y2,
             ]);
+            await _incrementTespitCount();
 
             // Eğer yeni çukur bulunduysa bildirim ışığını biraz tut:
             Future.delayed(const Duration(seconds: 4), () {
@@ -808,6 +837,7 @@ class _CameraTabState extends State<_CameraTab> {
           best.x2,
           best.y2,
         ]);
+        await _incrementTespitCount();
       }
 
       await widget.onAnalysisComplete();
@@ -1623,12 +1653,18 @@ class _MapTabState extends State<_MapTab> {
             width: 48.0,
             height: 48.0,
             point: LatLng(record.latitude!, record.longitude!),
-            builder: (ctx) => GestureDetector(
-              onTap: () => _showPotholeDetails(record),
-              child: const Icon(
-                Icons.warning_rounded,
-                color: Colors.redAccent,
-                size: 38,
+            builder: (ctx) => Transform.translate(
+              offset: const Offset(
+                0,
+                -24,
+              ), // Uyarı ikonunun (üçgenin) tam alt ucu gerçek konumu göstersin
+              child: GestureDetector(
+                onTap: () => _showPotholeDetails(record),
+                child: const Icon(
+                  Icons.warning_rounded,
+                  color: Colors.redAccent,
+                  size: 38,
+                ),
               ),
             ),
           ),
@@ -1855,8 +1891,7 @@ class _MapTabState extends State<_MapTab> {
                   options: MapOptions(
                     center: LatLng(41.0082, 28.9784),
                     zoom: 14.0,
-                    maxZoom:
-                        20.0, // Gereğinden fazla Zoom'da siyah ekrana düşmeyi engeller
+                    maxZoom: 20.0,
                   ),
                   children: [
                     TileLayer(
@@ -2277,6 +2312,8 @@ class _ProfileTab extends StatefulWidget {
 class _ProfileTabState extends State<_ProfileTab> {
   String _userName = 'Ferhat Rammok';
   String? _profileImagePath;
+  int _tespitCount = 2;
+  double _kmScanned = 0.04;
 
   @override
   void initState() {
@@ -2289,7 +2326,65 @@ class _ProfileTabState extends State<_ProfileTab> {
     setState(() {
       _userName = prefs.getString('profile_name') ?? 'Ferhat Rammok';
       _profileImagePath = prefs.getString('profile_image');
+      _tespitCount = prefs.getInt('profile_tespit') ?? 2;
+      _kmScanned = prefs.getDouble('profile_km') ?? 0.04;
     });
+  }
+
+  Future<void> _resetStats() async {
+    bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        bool isDark = Theme.of(context).brightness == Brightness.dark;
+        Color dialogBg = isDark ? const Color(0xFF1E283A) : Colors.white;
+        Color textColor = isDark ? Colors.white : Colors.black87;
+
+        return AlertDialog(
+          backgroundColor: dialogBg,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Verileri Sıfırla', style: TextStyle(color: textColor, fontWeight: FontWeight.bold)),
+          content: Text(
+            'Taranan KM ve tüm tespit geçmişi (veritabanı) silinecek. Emin misiniz?',
+            style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('İptal', style: TextStyle(color: Colors.blueAccent)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF4B4B),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Sıfırla', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm == true) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('profile_tespit', 0);
+      await prefs.setDouble('profile_km', 0.0);
+      await DatabaseHelper.instance.clearAll();
+      
+      if (mounted) {
+        setState(() {
+          _tespitCount = 0;
+          _kmScanned = 0.0;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Tüm veriler başarıyla sıfırlandı.')),
+        );
+      }
+    }
   }
 
   Future<void> _editName() async {
@@ -2505,13 +2600,13 @@ class _ProfileTabState extends State<_ProfileTab> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
-              children: const [
+              children: [
                 Expanded(
-                  child: _ProfileStat(title: 'Tespit', value: '142'),
+                  child: _ProfileStat(title: 'Tespiti', value: _tespitCount.toString()),
                 ),
-                SizedBox(width: 10),
+                const SizedBox(width: 10),
                 Expanded(
-                  child: _ProfileStat(title: 'KM Tarandı', value: '4.2k'),
+                  child: _ProfileStat(title: 'KM Tarandı', value: _kmScanned.toStringAsFixed(2)),
                 ),
               ],
             ),
@@ -2537,17 +2632,21 @@ class _ProfileTabState extends State<_ProfileTab> {
           const Spacer(),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF2A4D), // Kırmızı buton
+                foregroundColor: Colors.white,
                 minimumSize: const Size.fromHeight(50),
-                side: const BorderSide(color: Colors.redAccent),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              icon: const Icon(Icons.logout, color: Colors.redAccent),
+              icon: const Icon(Icons.delete_sweep, size: 20),
               label: const Text(
-                'Çıkış Yap',
-                style: TextStyle(color: Colors.redAccent),
+                'Tespiti ve KM\'yi Sıfırla',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
               ),
-              onPressed: () {},
+              onPressed: _resetStats,
             ),
           ),
         ],
