@@ -1,7 +1,6 @@
 import 'dart:math';
 import 'dart:io';
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -141,7 +140,7 @@ class Detection {
     return Detection(
       x1:
           json['x1']?.toDouble() ??
-          (bbox != null && bbox.length > 0 ? (bbox[0] as num).toDouble() : 0.0),
+          (bbox != null && bbox.isNotEmpty ? (bbox[0] as num).toDouble() : 0.0),
       y1:
           json['y1']?.toDouble() ??
           (bbox != null && bbox.length > 1 ? (bbox[1] as num).toDouble() : 0.0),
@@ -252,18 +251,6 @@ class _MainTabsState extends State<MainTabs> {
     } catch (e) {
       debugPrint('Toplu kayıt silme hatası: $e');
     }
-  }
-
-  String _getSizeFromBbox(List<dynamic> bbox) {
-    if (bbox.length < 4) return 'Bilinmiyor';
-    final x1 = (bbox[0] as num).toDouble();
-    final y1 = (bbox[1] as num).toDouble();
-    final x2 = (bbox[2] as num).toDouble();
-    final y2 = (bbox[3] as num).toDouble();
-    final area = (x2 - x1) * (y2 - y1);
-    if (area < 5000) return 'Küçük';
-    if (area < 20000) return 'Orta';
-    return 'Büyük';
   }
 
   @override
@@ -929,7 +916,7 @@ class _CameraTabState extends State<_CameraTab> {
         final int targetMs = stepMs * i;
         setState(() {
           _analysisText =
-              'Yapay Zeka Video Analizi: ${i}/${numFrames} (Lütfen bekleyin)';
+              'Yapay Zeka Video Analizi: $i/$numFrames (Lütfen bekleyin)';
         });
 
         final String? path = await vt.VideoThumbnail.thumbnailFile(
@@ -1173,8 +1160,9 @@ class _CameraTabState extends State<_CameraTab> {
                                                 400;
                                           }).toList();
 
-                                      if (activeDetections.isEmpty)
+                                      if (activeDetections.isEmpty) {
                                         return const SizedBox.shrink();
+                                      }
 
                                       return DetectionOverlay(
                                         detections: activeDetections,
@@ -2656,7 +2644,7 @@ class _ProfileTabState extends State<_ProfileTab> {
 }
 
 class _ProfileStat extends StatelessWidget {
-  const _ProfileStat({super.key, required this.title, required this.value});
+  const _ProfileStat({required this.title, required this.value});
 
   final String title;
   final String value;
@@ -3394,7 +3382,7 @@ class ProfileScreen extends StatelessWidget {
 }
 
 class _ProfileMetric extends StatelessWidget {
-  const _ProfileMetric({super.key, required this.title, required this.value});
+  const _ProfileMetric({required this.title, required this.value});
 
   final String title;
   final String value;
@@ -3520,7 +3508,7 @@ class DetectionOverlay extends StatelessWidget {
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
-                    '${className} ${(confidence * 100).toStringAsFixed(1)}%',
+                    '$className ${(confidence * 100).toStringAsFixed(1)}%',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 12,
