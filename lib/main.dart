@@ -38,7 +38,7 @@ class RoadGuardApp extends StatelessWidget {
       valueListenable: themeNotifier,
       builder: (context, themeMode, _) {
         return MaterialApp(
-          title: 'RoadGuard AI',
+          title: 'YolGüven',
           debugShowCheckedModeBanner: false,
           themeMode: themeMode,
           theme: ThemeData.light().copyWith(
@@ -285,7 +285,7 @@ class _MainTabsState extends State<MainTabs> {
           currentIndex: selectedIndex,
           onTap: (idx) {
             setState(() => selectedIndex = idx);
-            if (idx == 2) _fetchRecords();
+            if (idx == 1 || idx == 2) _fetchRecords();
           },
           type: BottomNavigationBarType.fixed,
           backgroundColor: isDark ? const Color(0xFF0C1320) : Colors.white,
@@ -560,7 +560,8 @@ class _CameraTabState extends State<_CameraTab> {
       if (_cameras.isNotEmpty) {
         _cameraController = CameraController(
           _cameras[0], // Arka kamera
-          ResolutionPreset.medium,
+          ResolutionPreset.high,
+          enableAudio: false,
         );
         await _cameraController!.initialize();
         setState(() {
@@ -572,10 +573,20 @@ class _CameraTabState extends State<_CameraTab> {
     }
   }
 
-  void _startLiveDetection() {
+  void _startLiveDetection() async {
     if (_isLiveDetectionActive) return;
 
     _isLiveDetectionActive = true;
+
+    // Yoldaki çukurlara odaklanması ve odak aramayı (motion blur) kesmesi için focus modunu kilitliyoruz.
+    try {
+      if (_cameraController != null && _cameraController!.value.isInitialized) {
+        await _cameraController!.setFocusMode(FocusMode.auto);
+        await Future.delayed(const Duration(milliseconds: 300));
+        await _cameraController!.setFocusMode(FocusMode.locked);
+      }
+    } catch (_) {}
+
     _cameraController!.startImageStream((CameraImage image) async {
       if (_isAnalyzing || !_isLiveDetectionActive) return;
       _isAnalyzing = true;
@@ -624,10 +635,9 @@ class _CameraTabState extends State<_CameraTab> {
 
           if (_lastDbSaveTime == null ||
               DateTime.now().difference(_lastDbSaveTime!) >
-                  const Duration(milliseconds: 1500)) {
+                  const Duration(milliseconds: 600)) {
             shouldSaveToDb = true;
 
-            // MESAFE KONTROLÜ: 2 metre sınırı ve 15 saniyelik zaman aşımı (Stationary testing fix)
             if (_latestPosition != null && _lastSavedPosition != null) {
               final distance = Geolocator.distanceBetween(
                 _lastSavedPosition!.latitude,
@@ -636,13 +646,22 @@ class _CameraTabState extends State<_CameraTab> {
                 _latestPosition!.longitude,
               );
 
-              bool isTimeOverride =
-                  _lastDbSaveTime != null &&
-                  DateTime.now().difference(_lastDbSaveTime!).inSeconds > 15;
+              final double speed = _latestPosition!.speed; // m/s
+              // Eğer hız 2 m/s (~7 km/h) üzerindeyse araç hareket halindedir.
+              // Araç hareket halindeyken GPS güncelleme sıklığı (1 Hz) nedeniyle mesafe kontrolü yavaş kalır.
+              // Bu sebeple hareket halindeyken sadece zaman bazlı (600ms) filtre uyguluyoruz.
+              if (speed > 2.0) {
+                // Sadece zaman bazlı filtre devrede, 600ms cooldown yeterli.
+              } else {
+                // Yavaş giderken ya da dururken mükerrer tespiti önlemek için mesafe ve zaman limitlerini kullanıyoruz.
+                bool isTimeOverride =
+                    _lastDbSaveTime != null &&
+                    DateTime.now().difference(_lastDbSaveTime!).inSeconds > 3;
 
-              if (distance < 2.0 && !isTimeOverride) {
-                shouldSaveToDb = false;
-                isDuplicate = true;
+                if (distance < 2.0 && !isTimeOverride) {
+                  shouldSaveToDb = false;
+                  isDuplicate = true;
+                }
               }
             }
           }
@@ -658,10 +677,12 @@ class _CameraTabState extends State<_CameraTab> {
               _lastSavedPosition = _latestPosition;
             }
 
-            final String liveLocName = await _getLocationString(
-              _latestPosition,
-              "Canlı Tarama GPS",
-            );
+            final String liveLocName = _latestPosition != null
+                ? await _getLocationString(_latestPosition, "Canlı Tarama GPS")
+                : "İstanbul (Simüle Konum)";
+
+            final double lat = _latestPosition?.latitude ?? (41.0082 + (Random().nextDouble() - 0.5) * 0.01);
+            final double lng = _latestPosition?.longitude ?? (28.9784 + (Random().nextDouble() - 0.5) * 0.01);
 
             final pr = PotholeRecord(
               id: 0,
@@ -669,9 +690,9 @@ class _CameraTabState extends State<_CameraTab> {
               location: liveLocName,
               timestamp: DateTime.now(),
               confidence: bestDet.confidence,
-              size: "Tahmini",
-              latitude: _latestPosition?.latitude,
-              longitude: _latestPosition?.longitude,
+              size: bestDet.className,
+              latitude: lat,
+              longitude: lng,
             );
             await DatabaseHelper.instance.insertRecord(pr, [
               bestDet.x1,
@@ -680,6 +701,7 @@ class _CameraTabState extends State<_CameraTab> {
               bestDet.y2,
             ]);
             await _incrementTespitCount();
+            await widget.onAnalysisComplete();
 
             // Eğer yeni çukur bulunduysa bildirim ışığını biraz tut:
             Future.delayed(const Duration(seconds: 4), () {
@@ -808,15 +830,18 @@ class _CameraTabState extends State<_CameraTab> {
 
       if (detections.isNotEmpty) {
         final best = detections.first;
+        final double lat = _latestPosition?.latitude ?? (41.0082 + (Random().nextDouble() - 0.5) * 0.01);
+        final double lng = _latestPosition?.longitude ?? (28.9784 + (Random().nextDouble() - 0.5) * 0.01);
+        final String locName = _latestPosition != null ? "Yerel Resim (TFLite)" : "İstanbul (Simüle Konum)";
         final pr = PotholeRecord(
           id: 0,
           imagePath: _mediaPath!,
-          location: "Yerel Resim (TFLite)",
+          location: locName,
           timestamp: DateTime.now(),
           confidence: maxConf,
-          size: "Tahmini",
-          latitude: _latestPosition?.latitude,
-          longitude: _latestPosition?.longitude,
+          size: best.className,
+          latitude: lat,
+          longitude: lng,
         );
         await DatabaseHelper.instance.insertRecord(pr, [
           best.x1,
@@ -946,7 +971,7 @@ class _CameraTabState extends State<_CameraTab> {
           _analysisText = 'TFLite Video Tespit: 0 | Temiz yol.';
         } else {
           _analysisText =
-              'TFLite Video: ${allDetections.length} Muhtemel Çukur (Oynatın)';
+              'TFLite Video: ${allDetections.length} Muhtemel Tespit (Oynatın)';
         }
       });
     } catch (e) {
@@ -1019,7 +1044,7 @@ class _CameraTabState extends State<_CameraTab> {
                   _StatusToken(
                     icon: Icons.circle,
                     color: Colors.green,
-                    text: 'YOLOv8 AI Aktif',
+                    text: 'YOLOv11n AI Aktif',
                   ),
                   _StatusToken(
                     icon: Icons.location_on,
@@ -1281,8 +1306,8 @@ class _CameraTabState extends State<_CameraTab> {
                                       children: [
                                         Text(
                                           _isDuplicateWait
-                                              ? 'Aynı Çukur Tespit Edildi'
-                                              : 'Çukur Kaydedildi!',
+                                              ? 'Aynı ${alert.className} Tespit Edildi'
+                                              : '${alert.className} Kaydedildi!',
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.bold,
@@ -1636,6 +1661,17 @@ class _MapTabState extends State<_MapTab> {
     final markers = <Marker>[];
     for (var record in widget.records) {
       if (record.latitude != null && record.longitude != null) {
+        final sizeStr = record.size.toLowerCase();
+        Color markerColor = Colors.redAccent;
+        if (sizeStr.contains('kasis')) {
+          markerColor = Colors.blueAccent;
+        } else if (sizeStr.contains('hafif')) {
+          markerColor = Colors.yellow.shade800;
+        } else if (sizeStr.contains('orta')) {
+          markerColor = Colors.orangeAccent;
+        } else if (sizeStr.contains('derin') || sizeStr.contains('büyük')) {
+          markerColor = Colors.redAccent;
+        }
         markers.add(
           Marker(
             width: 48.0,
@@ -1648,9 +1684,9 @@ class _MapTabState extends State<_MapTab> {
               ), // Uyarı ikonunun (üçgenin) tam alt ucu gerçek konumu göstersin
               child: GestureDetector(
                 onTap: () => _showPotholeDetails(record),
-                child: const Icon(
+                child: Icon(
                   Icons.warning_rounded,
-                  color: Colors.redAccent,
+                  color: markerColor,
                   size: 38,
                 ),
               ),
@@ -1726,12 +1762,22 @@ class _MapTabState extends State<_MapTab> {
                             width: 100,
                             height: 100,
                             fit: BoxFit.cover,
+                            errorBuilder: (context, err, stack) => _buildPlaceholder(),
+                          )
+                        : (record.imagePath.startsWith('/') || record.imagePath.contains(':'))
+                        ? Image.file(
+                            File(record.imagePath),
+                            width: 100,
+                            height: 100,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, err, stack) => _buildPlaceholder(),
                           )
                         : Image.asset(
                             record.imagePath,
                             width: 100,
                             height: 100,
                             fit: BoxFit.cover,
+                            errorBuilder: (context, err, stack) => _buildPlaceholder(),
                           ),
                   ),
                   const SizedBox(width: 16),
@@ -1820,6 +1866,20 @@ class _MapTabState extends State<_MapTab> {
     );
   }
 
+  Widget _buildPlaceholder() {
+    bool isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      width: 100,
+      height: 100,
+      color: Theme.of(context).cardColor,
+      child: Icon(
+        Icons.image_not_supported,
+        color: isDark ? Colors.white24 : Colors.black26,
+        size: 30,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -1849,7 +1909,7 @@ class _MapTabState extends State<_MapTab> {
                   _StatusToken(
                     icon: Icons.circle,
                     color: Colors.green,
-                    text: '${_markers.length} Çukur',
+                    text: '${_markers.length} Tespit',
                   ),
                   const _StatusToken(
                     icon: Icons.satellite_alt_rounded,
@@ -2476,7 +2536,7 @@ class _ProfileTabState extends State<_ProfileTab> {
                   const _StatusToken(
                     icon: Icons.circle,
                     color: Colors.green,
-                    text: 'YOLOv8 AI Aktif',
+                    text: 'YOLOv11n AI Aktif',
                   ),
                   _StatusToken(
                     icon: Icons.location_on,
@@ -2573,11 +2633,6 @@ class _ProfileTabState extends State<_ProfileTab> {
                             constraints: const BoxConstraints(),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Öncü Sürücü',
-                        style: TextStyle(color: subTextColor),
                       ),
                     ],
                   ),
@@ -2716,7 +2771,7 @@ class _DetectionScreenState extends State<DetectionScreen> {
   Widget build(BuildContext context) {
     bool isDark = Theme.of(context).brightness == Brightness.dark;
     final overlayText = isDetecting
-        ? 'POTHOLE DETECTED! (%${(detected?.confidence ?? 0) * 100 ~/ 1})'
+        ? '${detected?.size.toUpperCase()} TESPİT EDİLDİ! (%${(detected?.confidence ?? 0) * 100 ~/ 1})'
         : 'Hazır - Kamera aktif';
 
     return Scaffold(
@@ -2768,7 +2823,7 @@ class _DetectionScreenState extends State<DetectionScreen> {
                       ),
                       color: Colors.red.withOpacity(0.95),
                       child: Text(
-                        'Çukur - %${(detected!.confidence * 100).toStringAsFixed(0)}',
+                        '${detected!.size} - %${(detected!.confidence * 100).toStringAsFixed(0)}',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -3069,7 +3124,7 @@ class DetailScreen extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Text(
-                  'Çukur Detayı',
+                  'Tespit Detayı',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 16,
@@ -3333,13 +3388,6 @@ class ProfileScreen extends StatelessWidget {
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                         color: textColor,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Öncü Sürücü',
-                      style: TextStyle(
-                        color: isDark ? Colors.white70 : Colors.black54,
                       ),
                     ),
                   ],

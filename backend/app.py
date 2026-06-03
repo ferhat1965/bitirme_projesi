@@ -23,7 +23,7 @@ try:
 except ImportError:
     TFLITE_AVAILABLE = False
 
-# Ultralytics YOLOv8 için
+# Ultralytics YOLOv11 için
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
@@ -48,55 +48,169 @@ if MODEL_PATH.suffix == '.tflite' and TFLITE_AVAILABLE:
     model_type = 'tflite'
     print(f"TensorFlow Lite model yüklendi: {MODEL_PATH}")
 elif MODEL_PATH.suffix == '.pt' and YOLO_AVAILABLE:
-    # YOLOv8 model
+    # YOLOv11 model
     model = YOLO(str(MODEL_PATH))
     model_type = 'yolo'
-    print(f"YOLOv8 model yüklendi: {MODEL_PATH}")
+    print(f"YOLOv11 model yüklendi: {MODEL_PATH}")
 else:
-    raise FileNotFoundError(f"Model dosyası bulunamadı veya desteklenmiyor: {MODEL_PATH}. YOLOv8 (.pt) veya TensorFlow Lite (.tflite) dosyası gerekli.")
+    raise FileNotFoundError(f"Model dosyası bulunamadı veya desteklenmiyor: {MODEL_PATH}. YOLOv11 (.pt) veya TensorFlow Lite (.tflite) dosyası gerekli.")
 
 def detect_with_tflite(image: Image.Image):
-    """TensorFlow Lite ile tespit"""
-    # Input tensor bilgilerini al
+    """TensorFlow Lite ile tespit (YOLOv11 çıkış formatını destekler)"""
     input_details = model.get_input_details()
     output_details = model.get_output_details()
 
-    # Görüntüyü hazırla
-    img = image.resize((320, 320))  # YOLOv8 Tiny için tipik boyut
-    img_array = np.array(img, dtype=np.uint8)
+    # Model input properties
+    input_shape = input_details[0]['shape']
+    input_height = input_shape[1] if input_shape[3] == 3 else input_shape[2]
+    input_width = input_shape[2] if input_shape[3] == 3 else input_shape[3]
+    is_chw = input_shape[1] == 3 or input_shape[1] == 1
+    
+    is_float = input_details[0]['dtype'] == np.float32
+
+    # Resize image
+    img = image.resize((input_width, input_height))
+    img_array = np.array(img, dtype=np.float32 if is_float else np.uint8)
+    
+    if is_float:
+        img_array = img_array / 255.0
+
+    # Grayscale check
+    if input_shape[3] == 1 or (is_chw and input_shape[1] == 1):
+        img_gray = img.convert('L')
+        img_array = np.array(img_gray, dtype=np.float32 if is_float else np.uint8)
+        if is_float:
+            img_array = img_array / 255.0
+        img_array = np.expand_dims(img_array, axis=-1)
+
+    if is_chw:
+        if len(img_array.shape) == 3:
+            img_array = np.transpose(img_array, (2, 0, 1))
+        
     img_array = np.expand_dims(img_array, axis=0)
 
-    # Tensörü ayarla ve çıkarım yap
+    # Set tensor and run
     model.set_tensor(input_details[0]['index'], img_array)
     model.invoke()
 
-    # Sonuçları al
-    boxes = model.get_tensor(output_details[0]['index'])
-    classes = model.get_tensor(output_details[1]['index'])
-    scores = model.get_tensor(output_details[2]['index'])
+    # Get results dynamically
+    if len(output_details) > 1:
+        # SSD Mobilenet format (multiple output tensors)
+        boxes_idx = 0
+        classes_idx = 1
+        scores_idx = 2
+        
+        for det in output_details:
+            shape = det['shape']
+            if len(shape) == 3 and shape[2] == 4:
+                boxes_idx = det['index']
+            elif len(shape) == 2:
+                if 'class' in det['name'].lower():
+                    classes_idx = det['index']
+                elif 'score' in det['name'].lower():
+                    scores_idx = det['index']
+        
+        try:
+            boxes = model.get_tensor(boxes_idx)
+            classes = model.get_tensor(classes_idx)
+            scores = model.get_tensor(scores_idx)
+        except Exception:
+            boxes = model.get_tensor(output_details[0]['index'])
+            classes = model.get_tensor(output_details[1]['index'])
+            scores = model.get_tensor(output_details[2]['index'])
 
-    detections = []
-    for i in range(len(scores[0])):
-        if scores[0][i] > 0.25:  # confidence threshold
-            ymin, xmin, ymax, xmax = boxes[0][i]
-            class_id = int(classes[0][i])
+        detections = []
+        for i in range(len(scores[0])):
+            if scores[0][i] > 0.25:
+                ymin, xmin, ymax, xmax = boxes[0][i]
+                class_id = int(classes[0][i])
+                
+                class_names = {
+                    0: 'minor_pothole',
+                    1: 'medium_pothole',
+                    2: 'major_pothole',
+                    3: 'speed_bump'
+                }
+                c_name = class_names.get(class_id, 'pothole')
 
-            # Normalize coordinates
-            nx1 = max(0.0, min(1.0, xmin))
-            ny1 = max(0.0, min(1.0, ymin))
-            nx2 = max(0.0, min(1.0, xmax))
-            ny2 = max(0.0, min(1.0, ymax))
-
-            detections.append({
-                'bbox': [nx1, ny1, nx2, ny2],
-                'confidence': float(scores[0][i]),
-                'class': 'pothole',  # TFLite modelinde class name olmayabilir
-            })
-
-    return detections
+                detections.append({
+                    'bbox': [max(0.0, min(1.0, xmin)), max(0.0, min(1.0, ymin)), max(0.0, min(1.0, xmax)), max(0.0, min(1.0, ymax))],
+                    'confidence': float(scores[0][i]),
+                    'class': c_name,
+                })
+        return detections
+    else:
+        # YOLO format (single output tensor)
+        output = model.get_tensor(output_details[0]['index'])
+        output = np.squeeze(output)
+        
+        if len(output.shape) == 2:
+            if output.shape[0] > output.shape[1]:
+                output = np.transpose(output)
+                
+        num_classes = output.shape[0] - 4
+        num_boxes = output.shape[1]
+        
+        class_names = {
+            0: 'minor_pothole',
+            1: 'medium_pothole',
+            2: 'major_pothole',
+            3: 'speed_bump'
+        }
+        
+        raw_boxes = []
+        scores = []
+        class_ids = []
+        
+        for i in range(num_boxes):
+            box_scores = output[4:, i]
+            class_id = np.argmax(box_scores)
+            score = box_scores[class_id]
+            
+            if score > 0.25:
+                xc = output[0, i]
+                yc = output[1, i]
+                w = output[2, i]
+                h = output[3, i]
+                
+                divisor_w = 1.0 if xc <= 2.0 else float(input_width)
+                divisor_h = 1.0 if yc <= 2.0 else float(input_height)
+                
+                x1 = (xc - w / 2.0) / divisor_w
+                y1 = (yc - h / 2.0) / divisor_h
+                x2 = (xc + w / 2.0) / divisor_w
+                y2 = (yc + h / 2.0) / divisor_h
+                
+                raw_boxes.append([
+                    max(0.0, min(1.0, x1)),
+                    max(0.0, min(1.0, y1)),
+                    max(0.0, min(1.0, x2)),
+                    max(0.0, min(1.0, y2))
+                ])
+                scores.append(float(score))
+                class_ids.append(int(class_id))
+                
+        detections = []
+        if len(raw_boxes) > 0:
+            nms_boxes = []
+            for box in raw_boxes:
+                nms_boxes.append([box[0], box[1], box[2] - box[0], box[3] - box[1]])
+                
+            indices = cv2.dnn.NMSBoxes(nms_boxes, scores, 0.25, 0.45)
+            if len(indices) > 0:
+                indices = indices.flatten() if hasattr(indices, 'flatten') else indices
+                for idx in indices:
+                    c_id = class_ids[idx]
+                    c_name = class_names.get(c_id, f"class_{c_id}")
+                    detections.append({
+                        'bbox': raw_boxes[idx],
+                        'confidence': scores[idx],
+                        'class': c_name
+                    })
+        return detections
 
 def detect_with_yolo(image: Image.Image):
-    """YOLOv8 ile tespit"""
+    """YOLOv11 ile tespit"""
     results = model(image, imgsz=640, conf=0.25, iou=0.45)
     detections = []
 

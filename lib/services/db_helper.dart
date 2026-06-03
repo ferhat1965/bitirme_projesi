@@ -55,7 +55,7 @@ CREATE TABLE records (
       'latitude': record.latitude,
       'longitude': record.longitude,
       'confidence': record.confidence,
-      'class_name': 'pothole',
+      'class_name': record.size,
       'image_path': record.imagePath,
       'bbox': jsonEncode(bbox),
       'location': record.location,
@@ -82,6 +82,20 @@ CREATE TABLE records (
       final bboxStr = json['bbox'] as String;
       final bboxList = List<double>.from(jsonDecode(bboxStr));
       
+      final dbClassName = json['class_name'] as String? ?? 'pothole';
+      String sizeDisplay;
+      if (dbClassName == 'minor_pothole' || dbClassName == 'Hafif Çukur') {
+        sizeDisplay = 'Hafif Çukur';
+      } else if (dbClassName == 'medium_pothole' || dbClassName == 'Orta Çukur') {
+        sizeDisplay = 'Orta Çukur';
+      } else if (dbClassName == 'major_pothole' || dbClassName == 'Derin Çukur') {
+        sizeDisplay = 'Derin Çukur';
+      } else if (dbClassName == 'speed_bump' || dbClassName == 'Kasis') {
+        sizeDisplay = 'Kasis';
+      } else {
+        sizeDisplay = _getSizeFromBbox(bboxList);
+      }
+
       return PotholeRecord(
         id: json['id'] as int? ?? 0,
         imagePath: (json['image_path'] as String?)?.toString() ?? '',
@@ -91,7 +105,7 @@ CREATE TABLE records (
                 : 'Bilinmeyen Konum'),
         timestamp: DateTime.tryParse(json['detected_at']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
         confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
-        size: _getSizeFromBbox(bboxList),
+        size: sizeDisplay,
         latitude: (json['latitude'] as num?)?.toDouble(),
         longitude: (json['longitude'] as num?)?.toDouble(),
       );

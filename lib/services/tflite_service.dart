@@ -26,13 +26,24 @@ class TFLiteService {
   Future<void> init() async {
     if (_isInit) return;
     try {
-      final options = InterpreterOptions()
-        ..threads = 4
-        ..useNnApiForAndroid = true;
+      final options = InterpreterOptions()..threads = 4;
+      
+      try {
+        if (Platform.isAndroid) {
+          options.addDelegate(GpuDelegateV2());
+          print('TFLite GPU Delegate V2 başarıyla eklendi.');
+        } else if (Platform.isIOS) {
+          options.addDelegate(GpuDelegate());
+          print('TFLite Metal Delegate başarıyla eklendi.');
+        }
+      } catch (e) {
+        print('GPU Delegate başlatılamadı, NNAPI/CPU kullanılacak: $e');
+        options.useNnApiForAndroid = true;
+      }
         
       _interpreter = await Interpreter.fromAsset('assets/models/best.tflite', options: options);
       _isInit = true;
-      print('TFLite Modeli 4 Thread ve NNAPI (Donanım Hızlandırma) ile başarıyla yüklendi!');
+      print('TFLite Modeli donanım hızlandırma ile başarıyla yüklendi!');
       print('Input shape: ${_interpreter!.getInputTensor(0).shape}');
       print('Output shape: ${_interpreter!.getOutputTensor(0).shape}');
     } catch (e) {
@@ -92,36 +103,87 @@ class TFLiteService {
     double scaleX = srcW / size;
     double scaleY = srcH / size;
 
+    // Hızlı bölme işlemi için tablo
+    final Float32List div255Table = Float32List(256);
+    for (int i = 0; i < 256; i++) {
+      div255Table[i] = i / 255.0;
+    }
+
+    // Koordinat dönüşümlerini önceden hesapla (Double işlem ve Clamp sayısını azaltır)
+    final Int32List mappedX = Int32List(size);
+    for (int x = 0; x < size; x++) {
+      mappedX[x] = (x * scaleX).toInt().clamp(0, srcW - 1);
+    }
+    final Int32List mappedY = Int32List(size);
+    for (int y = 0; y < size; y++) {
+      mappedY[y] = (y * scaleY).toInt().clamp(0, srcH - 1);
+    }
+
     final Float32List inputBuffer = Float32List(1 * size * size * 3);
     int pIndex = 0;
 
-    for (int y = 0; y < size; y++) {
-      for (int x = 0; x < size; x++) {
-        int nx = (x * scaleX).toInt().clamp(0, srcW - 1);
-        int ny = (y * scaleY).toInt().clamp(0, srcH - 1);
-
-        int origX, origY;
-        if (rotation == 90) {
-          origX = ny;
-          origY = height - 1 - nx;
-        } else if (rotation == 270) {
-          origX = width - 1 - ny;
-          origY = nx;
-        } else if (rotation == 180) {
-          origX = width - 1 - nx;
-          origY = height - 1 - ny;
-        } else {
-          origX = nx;
-          origY = ny;
+    // Döngü içi "if (rotation)" sorgusunu tamamen dışarı alarak dal kontrolü (branching) optimizasyonu yapıyoruz
+    switch (rotation) {
+      case 90:
+        for (int y = 0; y < size; y++) {
+          final int ny = mappedY[y];
+          final int origX = ny;
+          for (int x = 0; x < size; x++) {
+            final int nx = mappedX[x];
+            final int origY = height - 1 - nx;
+            final int offset = origY * rowStride + origX;
+            final double lum = div255Table[yPlane[offset]];
+            inputBuffer[pIndex++] = lum;
+            inputBuffer[pIndex++] = lum;
+            inputBuffer[pIndex++] = lum;
+          }
         }
-
-        int offset = origY * rowStride + origX;
-        double lum = yPlane[offset] / 255.0;
-
-        inputBuffer[pIndex++] = lum;
-        inputBuffer[pIndex++] = lum;
-        inputBuffer[pIndex++] = lum;
-      }
+        break;
+      case 270:
+        for (int y = 0; y < size; y++) {
+          final int ny = mappedY[y];
+          final int origX = width - 1 - ny;
+          for (int x = 0; x < size; x++) {
+            final int nx = mappedX[x];
+            final int origY = nx;
+            final int offset = origY * rowStride + origX;
+            final double lum = div255Table[yPlane[offset]];
+            inputBuffer[pIndex++] = lum;
+            inputBuffer[pIndex++] = lum;
+            inputBuffer[pIndex++] = lum;
+          }
+        }
+        break;
+      case 180:
+        for (int y = 0; y < size; y++) {
+          final int ny = mappedY[y];
+          final int origY = height - 1 - ny;
+          for (int x = 0; x < size; x++) {
+            final int nx = mappedX[x];
+            final int origX = width - 1 - nx;
+            final int offset = origY * rowStride + origX;
+            final double lum = div255Table[yPlane[offset]];
+            inputBuffer[pIndex++] = lum;
+            inputBuffer[pIndex++] = lum;
+            inputBuffer[pIndex++] = lum;
+          }
+        }
+        break;
+      default: // 0
+        for (int y = 0; y < size; y++) {
+          final int ny = mappedY[y];
+          final int origY = ny;
+          for (int x = 0; x < size; x++) {
+            final int nx = mappedX[x];
+            final int origX = nx;
+            final int offset = origY * rowStride + origX;
+            final double lum = div255Table[yPlane[offset]];
+            inputBuffer[pIndex++] = lum;
+            inputBuffer[pIndex++] = lum;
+            inputBuffer[pIndex++] = lum;
+          }
+        }
+        break;
     }
 
     final outputShape = interpreter.getOutputTensor(0).shape;
@@ -138,7 +200,7 @@ class TFLiteService {
     String? savedPath;
     if (saveImage && detections.isNotEmpty && docDirPath != null) {
       final bestDet = detections.reduce((a, b) => a.confidence > b.confidence ? a : b);
-      if (bestDet.confidence >= 0.55) {
+      if (bestDet.confidence >= 0.45) {
         img.Image image = img.Image(width: width, height: height, numChannels: 3);
         for (int yy = 0; yy < height; yy++) {
           int offset = yy * rowStride;
@@ -226,7 +288,7 @@ class TFLiteService {
 
   static List<Detection> _parseOutput1D(Float32List outputBuffer, List<int> shape, int inputSize, int originalWidth, int originalHeight) {
     List<Detection> list = [];
-    final threshold = 0.55;
+    final threshold = 0.45;
 
     if (shape.length < 3) return list;
 
@@ -279,8 +341,10 @@ class TFLiteService {
 
         String detectedClass = 'Çukur';
         if (numClasses > 1) {
-           if (maxClassIndex == 0) detectedClass = 'Çukur';
-           else if (maxClassIndex == 1) detectedClass = 'Kasis';
+           if (maxClassIndex == 0) detectedClass = 'Hafif Çukur';
+           else if (maxClassIndex == 1) detectedClass = 'Orta Çukur';
+           else if (maxClassIndex == 2) detectedClass = 'Derin Çukur';
+           else if (maxClassIndex == 3) detectedClass = 'Kasis';
            else detectedClass = 'Sınıf $maxClassIndex';
         }
 
