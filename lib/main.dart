@@ -2505,6 +2505,71 @@ class _ProfileTabState extends State<_ProfileTab> {
     }
   }
 
+  Future<void> _showPhotoOptions() async {
+    bool isDark = Theme.of(context).brightness == Brightness.dark;
+    Color dialogBg = isDark ? const Color(0xFF1E283A) : Colors.white;
+    Color textColor = isDark ? Colors.white : Colors.black87;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: dialogBg,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border.all(color: isDark ? const Color(0xFF2E3B4E) : Colors.black12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white24 : Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: Icon(Icons.photo_library, color: Theme.of(context).primaryColor),
+                title: Text('Galeriden Seç', style: TextStyle(color: textColor)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickImage();
+                },
+              ),
+              if (_profileImagePath != null)
+                ListTile(
+                  leading: const Icon(Icons.delete, color: Colors.redAccent),
+                  title: const Text('Profil Resmini Kaldır', style: TextStyle(color: Colors.redAccent)),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.remove('profile_image');
+                    setState(() {
+                      _profileImagePath = null;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Profil resmi kaldırıldı.')),
+                    );
+                  },
+                ),
+              ListTile(
+                leading: Icon(Icons.close, color: isDark ? Colors.white54 : Colors.black54),
+                title: Text('İptal', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
+                onTap: () => Navigator.pop(context),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     bool isDark = Theme.of(context).brightness == Brightness.dark;
@@ -2565,7 +2630,7 @@ class _ProfileTabState extends State<_ProfileTab> {
             child: Row(
               children: [
                 GestureDetector(
-                  onTap: _pickImage,
+                  onTap: _showPhotoOptions,
                   child: Stack(
                     children: [
                       CircleAvatar(
