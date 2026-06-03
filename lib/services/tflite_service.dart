@@ -200,7 +200,7 @@ class TFLiteService {
     String? savedPath;
     if (saveImage && detections.isNotEmpty && docDirPath != null) {
       final bestDet = detections.reduce((a, b) => a.confidence > b.confidence ? a : b);
-      if (bestDet.confidence >= 0.45) {
+      if (bestDet.confidence >= 0.30) {
         img.Image image = img.Image(width: width, height: height, numChannels: 3);
         for (int yy = 0; yy < height; yy++) {
           int offset = yy * rowStride;
@@ -288,7 +288,7 @@ class TFLiteService {
 
   static List<Detection> _parseOutput1D(Float32List outputBuffer, List<int> shape, int inputSize, int originalWidth, int originalHeight) {
     List<Detection> list = [];
-    final threshold = 0.45;
+    final threshold = 0.30;
 
     if (shape.length < 3) return list;
 
